@@ -7,12 +7,14 @@ class GeminiAgent:
 
     def run_command(self, instruction, context_files=None):
         """Invoke Gemini CLI with optional context files and -y for non-interactive mode."""
-        # -p/--prompt is required for non-interactive (headless) mode
-        command = [config.GEMINI_CLI_COMMAND, "-y", "-p", instruction]
+        # If context files are provided, prepend them to the instruction using the @ symbol.
+        # This is the standard way to provide context files to the Gemini CLI in headless mode.
         if context_files:
-            # Files are passed as positional arguments following the prompt
-            command.extend(context_files)
-        
+            file_context = " ".join([f"@{f}" for f in context_files])
+            instruction = f"{file_context}\n\n{instruction}"
+
+        command = [config.GEMINI_CLI_COMMAND, "-y", "-p", instruction]
+
         result = subprocess.run(command, capture_output=True, text=True)
         if result.returncode == 0:
             return result.stdout.strip()
