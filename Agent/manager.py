@@ -6,7 +6,7 @@ import config
 class KnowledgeBaseManager:
     def __init__(self, server_name):
         self.server_name = self._sanitize_name(server_name)
-        self.root_path = os.path.join(config.BASE_STORAGE_PATH, self.server_name)
+        self.root_path = config.BASE_STORAGE_PATH
         self._ensure_repo_exists()
 
     def _sanitize_name(self, name):
