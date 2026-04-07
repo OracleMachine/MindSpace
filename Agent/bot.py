@@ -98,8 +98,7 @@ class MindSpaceBot(discord.Client):
 
             elif cmd == "research":
                 await message.channel.send(f"🔬 Synthesizing research on: {args}...")
-                index_path = os.path.join(channel_path, "INDEX.MD")
-                research_res = self.agent.run_command(f"Perform deep research on {args} using current KB context.", [index_path])
+                research_res = self.agent.run_command(f"Perform deep research on {args} using current KB context.", kb.get_channel_context(channel_name))
                 
                 filename = f"RESEARCH-{datetime.date.today()}-{message.id}.MD"
                 file_path = os.path.join(channel_path, filename)
@@ -113,6 +112,25 @@ class MindSpaceBot(discord.Client):
                 
                 await message.channel.send(f"✅ Research complete.", file=discord.File(file_path))
                 logger.info(f"**RESEARCH**: {args} in {channel_name}", message.guild)
+
+            elif cmd == "omni":
+                if not args:
+                    await message.channel.send("Usage: `!omni [query]`")
+                    return
+                await message.channel.send(f"🌐 Traversing entire knowledge base for: {args}...")
+                global_context = kb.get_global_context(args)
+                result = self.agent.run_command(
+                    f"Using the full knowledge base context across all channels, answer this query comprehensively with citations: {args}",
+                    global_context
+                )
+                filename = f"OMNI-{datetime.date.today()}-{message.id}.MD"
+                file_path = os.path.join(channel_path, filename)
+                lineage = f"\n\n---\n**Lineage:**\n- Path: {file_path}\n- Discord: {message.jump_url}\n- URI: viking://{message.guild.name}/omni/{filename}"
+                kb.write_file(file_path, result + lineage)
+                commit_msg = self.agent.generate_commit_message(f"Omni query synthesis: {args}")
+                kb.git_commit(commit_msg)
+                await message.channel.send(f"✅ Omni search complete.", file=discord.File(file_path))
+                logger.info(f"**OMNI**: {args}", message.guild)
 
         # --- 2. HANDLE KNOWLEDGE INGESTION (Links/Files) ---
         elif "http://" in message.content or "https://" in message.content:
@@ -146,8 +164,7 @@ class MindSpaceBot(discord.Client):
         # --- 3. PASSIVE THOUGHT RECORDING (Active Dialogue) ---
         else:
             # Gemini maintains the dialogue AND identifies extractable thoughts
-            index_path = os.path.join(channel_path, "INDEX.MD")
-            reply, thought = self.agent.engage_dialogue(message.content, channel_name, [index_path])
+            reply, thought = self.agent.engage_dialogue(message.content, channel_name, kb.get_channel_context(channel_name))
             
             if thought:
                 kb.append_thought(channel_name, thought)

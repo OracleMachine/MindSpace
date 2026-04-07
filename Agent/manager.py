@@ -2,12 +2,14 @@ import os
 import subprocess
 import datetime
 import config
+from viking import VikingContextManager
 
 class KnowledgeBaseManager:
     def __init__(self, server_name):
         self.server_name = self._sanitize_name(server_name)
         self.root_path = config.BASE_STORAGE_PATH
         self._ensure_repo_exists()
+        self.viking = VikingContextManager(self.root_path)
 
     def _sanitize_name(self, name):
         """Standardize folder names for the filesystem."""
@@ -45,9 +47,18 @@ class KnowledgeBaseManager:
             f.write(f"\n- [{timestamp}] {thought}")
 
     def git_commit(self, message):
-        """Perform a Git commit at the repository root."""
+        """Perform a Git commit and rebuild the Viking index."""
         subprocess.run(["git", "add", "."], cwd=self.root_path)
         subprocess.run(["git", "commit", "-m", message], cwd=self.root_path)
+        self.viking.rebuild_index()
+
+    def get_channel_context(self, channel_name: str) -> list:
+        """Return Viking L0/L1 context for a single channel."""
+        return self.viking.get_channel_context(channel_name)
+
+    def get_global_context(self, query: str) -> list:
+        """Return Viking context spanning all channel folders."""
+        return self.viking.get_global_context(query)
 
     def list_untracked_files(self):
         """Find untracked files on disk for the !organize command."""
