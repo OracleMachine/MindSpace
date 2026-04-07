@@ -163,13 +163,22 @@ class MindSpaceBot(discord.Client):
 
         # --- 3. PASSIVE THOUGHT RECORDING (Active Dialogue) ---
         else:
-            # Gemini maintains the dialogue AND identifies extractable thoughts
-            reply, thought = self.agent.engage_dialogue(message.content, channel_name, kb.get_channel_context(channel_name))
-            
+            reply, thought = self.agent.engage_dialogue(
+                message.content,
+                channel_name,
+                context_files=kb.get_channel_context(channel_name),
+                history=kb.get_history(channel_name),
+                stream_content=kb.get_stream_content(channel_name)
+            )
+
+            # Record this turn in conversation history
+            kb.append_history(channel_name, "user", message.content)
+            kb.append_history(channel_name, "assistant", reply)
+
             if thought:
                 kb.append_thought(channel_name, thought)
                 logger.info(f"💭 **THOUGHT**: Extracted in {channel_name}: {thought}", message.guild)
-            
+
             await message.channel.send(reply)
 
 if __name__ == "__main__":

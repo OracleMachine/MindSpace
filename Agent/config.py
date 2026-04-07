@@ -30,3 +30,6 @@ LITELLM_MODEL = "gemini/gemini-3-flash-preview"
 
 # PAGEINDEX_MODEL: Specialized model for deep document parsing.
 PAGEINDEX_MODEL = "gemini/gemini-3-flash-preview"
+
+# CONVERSATION_HISTORY_LIMIT: Number of recent turns (user + assistant pairs) to keep in memory per channel.
+CONVERSATION_HISTORY_LIMIT = 20

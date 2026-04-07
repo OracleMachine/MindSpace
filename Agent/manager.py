@@ -1,6 +1,7 @@
 import os
 import subprocess
 import datetime
+from collections import deque
 import config
 from viking import VikingContextManager
 
@@ -10,6 +11,7 @@ class KnowledgeBaseManager:
         self.root_path = config.BASE_STORAGE_PATH
         self._ensure_repo_exists()
         self.viking = VikingContextManager(self.root_path)
+        self._conversation_history = {}  # channel_name → deque of (role, content)
 
     def _sanitize_name(self, name):
         """Standardize folder names for the filesystem."""
@@ -59,6 +61,25 @@ class KnowledgeBaseManager:
     def get_global_context(self, query: str) -> list:
         """Return Viking context spanning all channel folders."""
         return self.viking.get_global_context(query)
+
+    def get_history(self, channel_name: str) -> list:
+        """Return recent conversation turns for the channel."""
+        return list(self._conversation_history.get(channel_name, []))
+
+    def append_history(self, channel_name: str, role: str, content: str):
+        """Append a turn to the channel's conversation history."""
+        if channel_name not in self._conversation_history:
+            self._conversation_history[channel_name] = deque(maxlen=config.CONVERSATION_HISTORY_LIMIT)
+        self._conversation_history[channel_name].append((role, content))
+
+    def get_stream_content(self, channel_name: str) -> str:
+        """Read the current STREAM_OF_CONSCIOUS.MD for the channel."""
+        path = self.get_channel_path(channel_name)
+        stream_file = os.path.join(path, "STREAM_OF_CONSCIOUS.MD")
+        if os.path.exists(stream_file):
+            with open(stream_file, "r") as f:
+                return f.read()
+        return ""
 
     def list_untracked_files(self):
         """Find untracked files on disk for the !organize command."""

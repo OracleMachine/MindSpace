@@ -3,6 +3,7 @@ import requests
 from bs4 import BeautifulSoup
 from litellm import completion
 from google import genai
+from google.genai import types
 import config
 from abc import ABC, abstractmethod
 from logger import logger
@@ -10,6 +11,11 @@ from logger import logger
 class LLMBrain(ABC):
     @abstractmethod
     def run_command(self, instruction, context_files=None):
+        pass
+
+    @abstractmethod
+    def chat(self, system_ctx: str, history: list, message: str) -> str:
+        """Multi-turn dialogue with persistent system context and conversation history."""
         pass
 
 class GoogleGenAIBrain(LLMBrain):
@@ -41,6 +47,24 @@ class GoogleGenAIBrain(LLMBrain):
             response = self.client.models.generate_content(
                 model=self.model,
                 contents=full_prompt
+            )
+            return response.text.strip()
+        except Exception as e:
+            raise Exception(f"Google GenAI SDK Error: {str(e)}")
+
+    def chat(self, system_ctx: str, history: list, message: str) -> str:
+        """Multi-turn call: system context via system_instruction, history as prior turns."""
+        contents = []
+        for role, content in history:
+            gemini_role = "model" if role == "assistant" else "user"
+            contents.append({"role": gemini_role, "parts": [{"text": content}]})
+        contents.append({"role": "user", "parts": [{"text": message}]})
+        try:
+            config = types.GenerateContentConfig(system_instruction=system_ctx) if system_ctx else None
+            response = self.client.models.generate_content(
+                model=self.model,
+                contents=contents,
+                config=config
             )
             return response.text.strip()
         except Exception as e:
@@ -80,6 +104,20 @@ class LiteLLMBrain(LLMBrain):
         except Exception as e:
             raise Exception(f"LiteLLM Error: {str(e)}")
 
+    def chat(self, system_ctx: str, history: list, message: str) -> str:
+        """Multi-turn call: system context as system message, history as prior turns."""
+        messages = []
+        if system_ctx:
+            messages.append({"role": "system", "content": system_ctx})
+        for role, content in history:
+            messages.append({"role": role, "content": content})
+        messages.append({"role": "user", "content": message})
+        try:
+            response = completion(model=self.model, messages=messages)
+            return response.choices[0].message.content.strip()
+        except Exception as e:
+            raise Exception(f"LiteLLM Error: {str(e)}")
+
 class MindSpaceAgent:
     def __init__(self, brain_type=None):
         # Default to brain type from config if not provided
@@ -95,14 +133,27 @@ class MindSpaceAgent:
     def run_command(self, instruction, context_files=None):
         return self.brain.run_command(instruction, context_files)
 
-    def engage_dialogue(self, user_message, channel_name, context_files=None):
-        prompt = (
-            f"Context: Channel #{channel_name}. "
-            f"1. Reply to this user message naturally: '{user_message}'. "
-            f"2. Separately, if this message contains a valuable insight or note worth recording, "
-            f"provide a 'THOUGHT: [summary]' at the end of your response. Otherwise, do not include a THOUGHT block."
+    def engage_dialogue(self, user_message, channel_name, context_files=None, history=None, stream_content=""):
+        # Build system context: Viking index + stream of conscious as persistent memory
+        system_parts = [f"You are a knowledge agent in Discord channel #{channel_name}."]
+        if context_files:
+            for f_path in context_files:
+                try:
+                    if os.path.exists(f_path):
+                        with open(f_path, "r") as f:
+                            system_parts.append(f"--- Channel Index ---\n{f.read()}")
+                except Exception:
+                    pass
+        if stream_content:
+            system_parts.append(f"--- Stream of Consciousness (extracted insights so far) ---\n{stream_content}")
+        system_parts.append(
+            "Reply naturally to the user. "
+            "If the message contains a valuable insight worth recording, append 'THOUGHT: [summary]' at the end. "
+            "Otherwise do not include a THOUGHT block."
         )
-        response = self.run_command(prompt, context_files)
+        system_ctx = "\n\n".join(system_parts)
+
+        response = self.brain.chat(system_ctx, history or [], user_message)
         reply = response
         thought = None
         if "THOUGHT:" in response:
