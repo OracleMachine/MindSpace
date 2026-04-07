@@ -5,6 +5,7 @@ from litellm import completion
 from google import genai
 import config
 from abc import ABC, abstractmethod
+from logger import logger
 
 class LLMBrain(ABC):
     @abstractmethod
@@ -28,7 +29,7 @@ class GoogleGenAIBrain(LLMBrain):
                             content = f.read()
                             context_content += f"\n--- Content of {f_path} ---\n{content}\n"
                 except Exception as e:
-                    print(f"Error reading context file {f_path}: {e}")
+                    logger.error(f"Error reading context file {f_path}: {e}")
 
         # Construct full prompt
         full_prompt = instruction
@@ -63,7 +64,7 @@ class LiteLLMBrain(LLMBrain):
                             content = f.read()
                             context_content += f"\n--- Content of {f_path} ---\n{content}\n"
                 except Exception as e:
-                    print(f"Error reading context file {f_path}: {e}")
+                    logger.error(f"Error reading context file {f_path}: {e}")
 
         if context_content:
             messages.append({"role": "system", "content": f"You have access to the following context files to help answer the user prompt:\n{context_content}"})
@@ -85,10 +86,10 @@ class MindSpaceAgent:
         bt = brain_type or config.AGENT_BRAIN_TYPE
         
         if bt == "litellm":
-            print(f"🧠 MindSpaceAgent: Initializing LiteLLM Brain (Model: {config.LITELLM_MODEL})")
+            logger.info(f"🧠 MindSpaceAgent: Initializing LiteLLM Brain (Model: {config.LITELLM_MODEL})")
             self.brain = LiteLLMBrain()
         else:
-            print(f"🧠 MindSpaceAgent: Initializing Google GenAI SDK Brain (Model: {config.GEMINI_SDK_MODEL})")
+            logger.info(f"🧠 MindSpaceAgent: Initializing Google GenAI SDK Brain (Model: {config.GEMINI_SDK_MODEL})")
             self.brain = GoogleGenAIBrain()
 
     def run_command(self, instruction, context_files=None):

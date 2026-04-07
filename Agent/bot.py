@@ -2,18 +2,45 @@ import discord
 import os
 import datetime
 import config
+import asyncio
 from agent import MindSpaceAgent
 from manager import KnowledgeBaseManager
+from logger import logger
 
 class MindSpaceBot(discord.Client):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        # Bind the global logger to this bot instance
+        logger.bind_bot(self)
         self.agent = MindSpaceAgent()
         self.kb_managers = {}  # Map server_id to KnowledgeBaseManager instance
 
+    async def setup_hook(self):
+        """Start background tasks."""
+        self.loop.create_task(logger.process_log_queue())
+
     async def on_ready(self):
-        print(f'Logged in as {self.user} (ID: {self.user.id})')
-        print('------')
+        logger.info(f'Logged in as {self.user} (ID: {self.user.id})')
+        logger.info('------')
+        for guild in self.guilds:
+            await self._ensure_system_log(guild)
+
+    async def _ensure_system_log(self, guild):
+        """Ensure a #system-log channel exists in the guild."""
+        channel = discord.utils.get(guild.text_channels, name="system-log")
+        if not channel:
+            try:
+                channel = await guild.create_text_channel("system-log")
+                await channel.send("🚀 **MindSpace System Log Initialized.**")
+            except Exception as e:
+                logger.error(f"Error creating system-log in {guild.name}: {e}")
+        return channel
+
+    async def send_system_log(self, guild, message):
+        """Internal method for logger to send to Discord."""
+        channel = await self._ensure_system_log(guild)
+        if channel:
+            await channel.send(message)
 
     def _get_manager(self, guild):
         """Lazy-load manager for the specific server."""
@@ -44,6 +71,7 @@ class MindSpaceBot(discord.Client):
                 commit_msg = self.agent.generate_commit_message(f"Organized files in {channel_name}: {reasoning}")
                 kb.git_commit(commit_msg)
                 await message.channel.send(f"✅ Organization complete. Reasoning: {reasoning}")
+                logger.info(f"**ORGANIZE**: {channel_name} - {commit_msg}", message.guild)
 
             elif cmd == "consolidate":
                 await message.channel.send("📑 Consolidating stream of consciousness...")
@@ -66,6 +94,7 @@ class MindSpaceBot(discord.Client):
                 kb.git_commit(commit_msg)
                 
                 await message.channel.send(f"✅ Consolidation complete. Saved to: {file_path}", file=discord.File(file_path))
+                logger.info(f"**CONSOLIDATE**: {channel_name} -> `{filename}`", message.guild)
 
             elif cmd == "research":
                 await message.channel.send(f"🔬 Synthesizing research on: {args}...")
@@ -83,11 +112,12 @@ class MindSpaceBot(discord.Client):
                 kb.git_commit(commit_msg)
                 
                 await message.channel.send(f"✅ Research complete.", file=discord.File(file_path))
+                logger.info(f"**RESEARCH**: {args} in {channel_name}", message.guild)
 
         # --- 2. HANDLE KNOWLEDGE INGESTION (Links/Files) ---
         elif "http://" in message.content or "https://" in message.content:
             await message.channel.send("🌐 URL detected. Snapshotting to KB...")
-            # Use Gemini CLI to process URL content directly
+            # Use Gemini SDK to process URL content directly
             markdown_snapshot = self.agent.process_url(message.content, channel_name)
             
             filename = f"WEBPAGE-{datetime.date.today()}-{message.id}.MD"
@@ -97,6 +127,7 @@ class MindSpaceBot(discord.Client):
             commit_msg = self.agent.generate_commit_message(f"Ingested webpage snapshot: {filename}")
             kb.git_commit(commit_msg)
             await message.channel.send(f"✅ Link ingested and snapshotted: {file_path}")
+            logger.info(f"**INGEST (URL)**: {message.content[:50]}... -> `{filename}`", message.guild)
 
         elif message.attachments:
             await message.channel.send("📥 File detected. Ingesting to KB...")
@@ -104,24 +135,23 @@ class MindSpaceBot(discord.Client):
                 file_path = os.path.join(channel_path, attachment.filename)
                 await attachment.save(file_path)
                 
-                # Use Gemini CLI to analyze and place semantically
+                # Use Gemini SDK to analyze and place semantically
                 analysis = self.agent.run_command(f"Analyze this file: {file_path}. Determine human-readable slug and placement.")
                 
                 commit_msg = self.agent.generate_commit_message(f"Ingested file: {attachment.filename}")
                 kb.git_commit(commit_msg)
                 await message.channel.send(f"✅ File ingested: {attachment.filename}. Analysis: {analysis}")
+                logger.info(f"**INGEST (FILE)**: `{attachment.filename}` in {channel_name}", message.guild)
 
         # --- 3. PASSIVE THOUGHT RECORDING (Active Dialogue) ---
         else:
-            # Gemini CLI maintains the dialogue AND identifies extractable thoughts
-            # For simplicity in this prototype, we pass the channel INDEX.MD for context
+            # Gemini maintains the dialogue AND identifies extractable thoughts
             index_path = os.path.join(channel_path, "INDEX.MD")
             reply, thought = self.agent.engage_dialogue(message.content, channel_name, [index_path])
             
             if thought:
                 kb.append_thought(channel_name, thought)
-                # No commit on passive thought to keep history clean unless active sync happens
-                print(f"Secretly extracted thought in {channel_name}: {thought}")
+                logger.info(f"💭 **THOUGHT**: Extracted in {channel_name}: {thought}", message.guild)
             
             await message.channel.send(reply)
 
@@ -135,10 +165,10 @@ if __name__ == "__main__":
     missing = [var for var, val in required_vars.items() if not val]
     
     if missing:
-        print(f"❌ Error: Missing required environment variables: {', '.join(missing)}")
-        print("Please ensure they are exported in your ZSH environment (~/.zshrc).")
+        logger.error(f"❌ Error: Missing required environment variables: {', '.join(missing)}")
+        logger.error("Please ensure they are exported in your ZSH environment (~/.zshrc).")
     else:
-        print("✅ Environment validated. Starting MindSpace Bot...")
+        logger.info("✅ Environment validated. Starting MindSpace Bot...")
         intents = discord.Intents.default()
         intents.message_content = True
         bot = MindSpaceBot(intents=intents)
