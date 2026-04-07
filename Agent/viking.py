@@ -12,7 +12,7 @@ class VikingContextManager:
     - Channel-scoped: default for all messages and single-channel commands.
     - Global: activated by !omni to traverse all channel folders.
 
-    Falls back to reading INDEX.MD files directly if OpenViking is not installed.
+    Falls back to reading index.md files directly if OpenViking is not installed.
     Replace the TODO blocks below with actual OpenViking API calls once confirmed.
     """
 
@@ -40,8 +40,8 @@ class VikingContextManager:
             # TODO: Return OpenViking L1 context slices scoped to channel_path
             # return self._index.get_context(channel_path, level="L1")
             pass
-        # Fallback: pass INDEX.MD directly (current behaviour)
-        index_file = os.path.join(channel_path, "INDEX.MD")
+        # Fallback: pass index.md directly (current behaviour)
+        index_file = os.path.join(channel_path, "index.md")
         return [index_file] if os.path.exists(index_file) else []
 
     def get_global_context(self, query: str) -> list:
@@ -53,11 +53,11 @@ class VikingContextManager:
             # TODO: Run a server-wide OpenViking query returning L1 slices ranked by relevance
             # return self._index.query(query, scope="global", level="L1")
             pass
-        # Fallback: collect every channel's INDEX.MD
+        # Fallback: collect every channel's index.md
         context_files = []
         for entry in os.scandir(self.root_path):
             if entry.is_dir() and not entry.name.startswith("."):
-                index_file = os.path.join(entry.path, "INDEX.MD")
+                index_file = os.path.join(entry.path, "index.md")
                 if os.path.exists(index_file):
                     context_files.append(index_file)
         return context_files

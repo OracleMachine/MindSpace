@@ -29,9 +29,9 @@ class KnowledgeBaseManager:
         path = os.path.join(self.root_path, folder_name)
         if not os.path.exists(path):
             os.makedirs(path)
-            # Initialize core files as per SPEC.MD
-            self.write_file(os.path.join(path, "INDEX.MD"), f"# Index: {folder_name}\n\nAbstract: Initialized.")
-            self.write_file(os.path.join(path, "STREAM_OF_CONSCIOUS.MD"), f"# Stream of Consciousness: {folder_name}\n\n")
+            # Initialize core files as per design.md
+            self.write_file(os.path.join(path, "index.md"), f"# Index: {folder_name}\n\nAbstract: Initialized.")
+            self.write_file(os.path.join(path, "stream_of_conscious.md"), f"# Stream of Consciousness: {folder_name}\n\n")
         return path
 
     def write_file(self, file_path, content):
@@ -41,9 +41,9 @@ class KnowledgeBaseManager:
             f.write(content)
 
     def append_thought(self, channel_name, thought):
-        """Append a timestamped thought to the STREAM_OF_CONSCIOUS.MD."""
+        """Append a timestamped thought to the stream_of_conscious.md."""
         path = self.get_channel_path(channel_name)
-        stream_file = os.path.join(path, "STREAM_OF_CONSCIOUS.MD")
+        stream_file = os.path.join(path, "stream_of_conscious.md")
         timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
         with open(stream_file, "a") as f:
             f.write(f"\n- [{timestamp}] {thought}")
@@ -73,9 +73,9 @@ class KnowledgeBaseManager:
         self._conversation_history[channel_name].append((role, content))
 
     def get_stream_content(self, channel_name: str) -> str:
-        """Read the current STREAM_OF_CONSCIOUS.MD for the channel."""
+        """Read the current stream_of_conscious.md for the channel."""
         path = self.get_channel_path(channel_name)
-        stream_file = os.path.join(path, "STREAM_OF_CONSCIOUS.MD")
+        stream_file = os.path.join(path, "stream_of_conscious.md")
         if os.path.exists(stream_file):
             with open(stream_file, "r") as f:
                 return f.read()

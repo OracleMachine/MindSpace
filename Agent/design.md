@@ -1,92 +1,123 @@
-# Project Specification: Hierarchical Knowledge Agent (SPEC.MD)
+# Project Specification: MindSpace Hierarchical Knowledge Agent
 
 ## 1. Project Goal & Philosophy
-Create an AI agent (Gemini CLI) that acts as a cognitive partner across three primary functions: **Thought Recording**, **Knowledge Base Management**, and **Research**. 
+
+Create an AI agent that acts as a cognitive partner across three primary functions: **Thought Recording**, **Knowledge Base Management**, and **Research**.
 
 **Philosophy:** "Discord as the Input Stream, Filesystem as the Source of Truth."
-The system uses **OpenViking** for context mapping and **PageIndex** for deep document reasoning, resulting in a human-readable, self-organizing filesystem backed by **Git** for full auditability.
+
+The system uses **VikingContextManager** (wrapping OpenViking) for context navigation and **PageIndex** (planned) for deep document reasoning, resulting in a human-readable, self-organizing filesystem backed by **Git** for full auditability.
 
 ---
 
 ## 2. Technical Stack
-- **Engine:** Gemini CLI (Invoked in a conversational loop per message)
+
+- **Engine:** Google GenAI SDK (`google-genai`) — default brain (`AGENT_BRAIN_TYPE = "sdk"`)
+- **Alternative Brain:** LiteLLM for multi-provider support (`AGENT_BRAIN_TYPE = "litellm"`)
 - **Language:** Python 3.12+
-- **Knowledge Framework:** [OpenViking](https://github.com/volcengine/OpenViking) (Context mapping)
-- **Indexing Framework:** [PageIndex](https://github.com/VectifyAI/PageIndex) (Deep document parsing)
-- **Front-end:** Discord API (discord.py)
-- **Version Control:** Git (One repository per Discord Server)
+- **Knowledge Framework:** [OpenViking](https://github.com/volcengine/OpenViking) — wrapped by `VikingContextManager` in `viking.py`; falls back to reading `index.md` directly if not installed
+- **Indexing Framework:** [PageIndex](https://github.com/VectifyAI/PageIndex) — planned for deep document parsing; not yet integrated
+- **Front-end:** Discord API (`discord.py`)
+- **Version Control:** Git (one repository per Discord Server, stored at `BASE_STORAGE_PATH`)
 
 ---
 
 ## 3. Architecture & Filesystem Mapping
 
 ### 3.1 The "One Server = One Repo" Rule
-Each Discord Server maps to a unique root directory on the filesystem, which is initialized as a Git repository.
-- **Root Directory:** `/{Server_Name}/` (e.g., `/Project_Alpha/`)
+
+Each Discord Server maps to a single Git repository at `BASE_STORAGE_PATH` (default: `/home/yolo/repos/Thought`).
 
 ### 3.2 Hierarchy Logic (Macro-to-Micro)
-The directory structure is divided into two zones:
 
-#### The Human-Controlled Zone (Rigid)
-- **Discord Channels:** Map 1:1 to top-level "Channel" folders (e.g., `#machine-learning` -> `/Project_Alpha/Machine_Learning/`).
-- **Core Files:** Every Channel folder MUST contain:
-    - `INDEX.MD`: The high-level context map for OpenViking.
-    - `STREAM_OF_CONSCIOUS.MD`: The running log of distilled thoughts.
+#### Human-Controlled Zone (Rigid)
+- Discord Channels map 1:1 to top-level folders (e.g., `#machine-learning` → `Machine_Learning/`).
+- Every channel folder contains two core files, initialized automatically:
+  - `index.md` — channel context map, owned and rebuilt by `VikingContextManager`
+  - `stream_of_conscious.md` — running log of AI-extracted insights
 
-#### The AI-Controlled "Autonomous Zone" (Fluid)
-- Inside each Channel folder, the Gemini CLI has absolute freedom to create deeply nested sub-folders based on semantic meaning (e.g., `/Machine_Learning/Neural_Networks/Transformers/`).
-
----
-
-## 4. Functional Pillars
-
-### 4.1 Thought Recorder (Active Dialogue)
-- **Input:** Any regular text message in a Discord channel.
-- **Action:** Gemini CLI acts as a conversational partner, replying to every message to keep the discussion flowing.
-- **Extraction:** Simultaneously, the agent evaluates the dialogue, identifies critical insights, and **secretly appends** them to the channel's `STREAM_OF_CONSCIOUS.MD`.
-
-### 4.2 Knowledge Base Manager (Ingestion)
-- **Input:** Files (PDFs, images, etc.) or **Internet URLs** dropped into Discord.
-- **Process for Files:** Download -> PageIndex parse -> Gemini semantic placement -> Git commit.
-- **Process for Links:** Fetch content -> Convert to Markdown snapshot (`WEBPAGE-slug.md`) -> Ingest as a file.
-- **Manual Sync:** Files moved manually onto the disk are detected and indexed whenever the `!organize` command is triggered.
-
-### 4.3 Research Engine
-- **Input:** Specific user instructions (triggered by `!research`).
-- **Action:** Gemini uses OpenViking/PageIndex to synthesize data across the entire KB.
-- **Output:** Structured articles with lineage citations (Local Path, Discord Ref, Viking URI).
+#### AI-Controlled Autonomous Zone (Fluid)
+- Inside each channel folder, the agent has freedom to create semantically nested sub-folders (e.g., `Machine_Learning/Neural_Networks/Transformers/`).
 
 ---
 
-## 5. Framework Synergy: PageIndex & OpenViking
+## 4. Module Responsibilities
 
-- **PageIndex (The Reader):** Used for **content-level depth**. It parses documents into reasoning trees. Used during ingestion to "understand" files and during research to find "specific" facts.
-- **OpenViking (The Librarian):** Used for **contextual mapping**. It manages the `viking://` URI space and provides "Abstract" (L0) and "Overview" (L1) layers so Gemini can navigate the tree without reading every file.
+| Module | Responsibility |
+| :--- | :--- |
+| `bot.py` | Discord event loop (`on_message`), command routing, history recording. Single `KnowledgeBaseManager` instance (`self.kb`) initialized in `on_ready`. `on_guild_join` enforces the single-server constraint by leaving immediately if `self.kb` is already set. |
+| `agent.py` | LLM abstraction (`GoogleGenAIBrain`, `LiteLLMBrain`), dialogue, URL processing |
+| `manager.py` | Filesystem writes, Git commits, per-channel conversation history, stream reads |
+| `viking.py` | OpenViking wrapper; two-mode context management (channel-scoped / global) |
+| `config.py` | Centralized configuration for paths, models, brain type, history limit |
+| `logger.py` | Dual-output logger: console (all levels) + Discord `#system-log` (INFO and above, guild-scoped) |
 
 ---
 
-## 6. Core Workflows (Commands)
+## 5. Memory & Context Architecture
 
-| Command | Action | Implementation Logic |
+The agent maintains two layers of memory per channel:
+
+| Layer | Storage | Scope | Reset on restart? |
+| :--- | :--- | :--- | :--- |
+| **Short-term** | In-memory `deque` (maxlen = `CONVERSATION_HISTORY_LIMIT`, default 20 turns) | Current session | Yes |
+| **Long-term** | `stream_of_conscious.md` on disk | Persistent across restarts | No |
+
+On every passive dialogue message, the agent receives:
+
+```
+[System Context]
+  - Channel identity
+  - index.md (Viking L0/L1 navigation layer)
+  - stream_of_conscious.md (all extracted insights so far)
+  - Instruction to append THOUGHT: if insight is found
+
+[Conversation History]
+  - Last N user/assistant turn pairs
+
+[Current Message]
+  - User's latest message
+```
+
+After each reply, the turn is appended to the in-memory history. Extracted `THOUGHT:` blocks are appended to `stream_of_conscious.md` and committed to Git.
+
+---
+
+## 6. VikingContextManager: Two-Mode Context
+
+`viking.py` wraps OpenViking with two explicit modes:
+
+| Mode | Method | Trigger | Scope |
+| :--- | :--- | :--- | :--- |
+| **Channel-scoped** | `get_channel_context(channel_name)` | All default operations | Current channel folder only |
+| **Global** | `get_global_context(query)` | `!omni` only | All channel folders in the server |
+
+`rebuild_index()` is called automatically after every `git_commit()` to keep the index fresh.
+
+Until OpenViking is fully integrated, both methods fall back to returning the relevant `index.md` file(s) directly. The `TODO` markers in `viking.py` indicate exact integration points.
+
+---
+
+## 7. Core Workflows (Commands)
+
+| Command | Action | Output file |
 | :--- | :--- | :--- |
-| **`!organize`** | Re-sync & Optimize | Scans for untracked files, performs semantic re-organization, and updates all `INDEX.MD` files. Triggers a Git commit. |
-| **`!consolidate`** | Permanent Record | Synthesizes `STREAM_OF_CONSCIOUS.MD` into a permanent article, clears the stream, and files the article into the Autonomous Zone. Sends the file back to Discord. |
-| **`!research [topic]`**| Knowledge Synthesis | Generates a deep-dive research paper based on the current KB context. Includes citations and sends the file back to Discord. |
-| **`!global [query]`** | Cross-KB Search | Searches across all categories in the current server KB. |
+| `!organize` | Scans untracked files, semantic re-organization, git commit | — |
+| `!consolidate` | Synthesizes `stream_of_conscious.md` into a permanent article, clears stream, git commit | `ARTICLE-<date>-<id>.md` |
+| `!research [topic]` | Deep-dive on topic using current channel KB context, git commit | `RESEARCH-<date>-<id>.md` |
+| `!omni [query]` | Cross-KB synthesis across **all** channel folders (global Viking traversal), git commit | `OMNI-<date>-<id>.md` |
+| URL in message | Fetches page, converts to Markdown snapshot, git commit | `WEBPAGE-<date>-<id>.md` |
+| File attachment | Saves and semantically analyzes file, git commit | — |
+| Plain text | Passive dialogue: replies, extracts `THOUGHT:` to stream | — |
+
+All output `.md` files are sent back to the Discord channel as attachments immediately after creation, along with their local filesystem path and `viking://` URI lineage.
 
 ---
 
-## 7. Implementation Instructions (Prototyping Phase)
+## 8. Implementation Rules
 
-### 7.1 Simplicity & Isolation
-- **Isolation:** Run one Python bot process per Discord Server.
-- **Persistence:** Every "Active Command" (prefixed with `!`) MUST be followed by a `git commit` with an AI-generated message explaining the *intent* of the change.
-
-### 7.2 Visibility & UX
-- **No Noise:** The bot should be quiet in Discord. No ASCII maps or pinned messages needed.
-- **Instant Access:** Whenever a new `.md` file is created, the bot MUST send the file back to the Discord channel as an attachment along with its local filesystem path.
-
-### 7.3 Code Logic
-- **The Loop:** Use `discord.py`'s `on_message`.
-- **Gemini CLI:** Invoke via `subprocess.run(["gemini", ...])`.
-- **Prompting:** Pass OpenViking context (L0/L1) to Gemini so it understands "where it is" in the knowledge tree before responding.
+- **One process per Discord Server.** `KnowledgeBaseManager` is lazy-loaded per guild in `bot.py`.
+- **Every active command** (`!`) is followed by a `git commit` with an AI-generated message explaining intent.
+- **Bot is quiet.** No unprompted messages, no pinned maps, no ASCII trees.
+- **Instant file delivery.** Every new `.md` file created is sent back to Discord as an attachment.
+- **File naming:** all output markdown files use lowercase `.md` extension.

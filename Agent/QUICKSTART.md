@@ -61,7 +61,7 @@ Upon successful login, the bot will initialize a local Git repository for your D
 
 ## 5. Basic Usage
 
-- **Active Dialogue:** Chat naturally; the agent replies and extracts insights to `STREAM_OF_CONSCIOUS.MD`.
+- **Active Dialogue:** Chat naturally; the agent replies and extracts insights to `stream_of_conscious.md`.
 - **File Ingestion:** Drop a PDF or image for semantic filing.
 - **Link Ingestion:** Paste a URL to snapshot the webpage as Markdown.
 - **`!organize`**: Sync files and optimize the tree.
