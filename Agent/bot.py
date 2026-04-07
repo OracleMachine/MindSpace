@@ -2,13 +2,13 @@ import discord
 import os
 import datetime
 import config
-from agent import GeminiAgent
+from agent import MindSpaceAgent
 from manager import KnowledgeBaseManager
 
 class MindSpaceBot(discord.Client):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.agent = GeminiAgent()
+        self.agent = MindSpaceAgent()
         self.kb_managers = {}  # Map server_id to KnowledgeBaseManager instance
 
     async def on_ready(self):
