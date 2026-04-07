@@ -1,8 +1,8 @@
 import os
-import subprocess
 import requests
 from bs4 import BeautifulSoup
 from litellm import completion
+from google import genai
 import config
 from abc import ABC, abstractmethod
 
@@ -11,28 +11,39 @@ class LLMBrain(ABC):
     def run_command(self, instruction, context_files=None):
         pass
 
-class GeminiCLIBrain(LLMBrain):
-    def __init__(self):
-        # Isolate the CLI configuration by setting GEMINI_CLI_HOME
-        if hasattr(config, "GEMINI_CLI_HOME"):
-            os.environ["GEMINI_CLI_HOME"] = config.GEMINI_CLI_HOME
-            # Ensure the directory exists
-            os.makedirs(config.GEMINI_CLI_HOME, exist_ok=True)
+class GoogleGenAIBrain(LLMBrain):
+    def __init__(self, model=config.GEMINI_SDK_MODEL):
+        self.model = model
+        self.client = genai.Client(api_key=config.GEMINI_API_KEY)
 
     def run_command(self, instruction, context_files=None):
-        """Invoke Gemini CLI with optional context files."""
+        """Invoke Gemini SDK with optional context files."""
+        # Handle context files
+        context_content = ""
         if context_files:
-            file_context = " ".join([f"@{f}" for f in context_files])
-            instruction = f"{file_context}\n\n{instruction}"
+            for f_path in context_files:
+                try:
+                    if os.path.exists(f_path):
+                        with open(f_path, "r") as f:
+                            content = f.read()
+                            context_content += f"\n--- Content of {f_path} ---\n{content}\n"
+                except Exception as e:
+                    print(f"Error reading context file {f_path}: {e}")
 
-        # Explicitly use gemini-3-flash as requested
-        command = [config.GEMINI_CLI_COMMAND, "-m", "gemini-3-flash", "-y", "-p", instruction]
-        
-        # subprocess.run inherits os.environ by default, which now contains GEMINI_CLI_HOME
-        result = subprocess.run(command, capture_output=True, text=True)
-        if result.returncode == 0:
-            return result.stdout.strip()
-        raise Exception(f"Gemini CLI Error: {result.stderr}")
+        # Construct full prompt
+        full_prompt = instruction
+        if context_content:
+            full_prompt = f"System Context (Files):\n{context_content}\n\nUser Message: {instruction}"
+
+        # API Call
+        try:
+            response = self.client.models.generate_content(
+                model=self.model,
+                contents=full_prompt
+            )
+            return response.text.strip()
+        except Exception as e:
+            raise Exception(f"Google GenAI SDK Error: {str(e)}")
 
 class LiteLLMBrain(LLMBrain):
     def __init__(self, model=config.LITELLM_MODEL):
@@ -59,21 +70,26 @@ class LiteLLMBrain(LLMBrain):
         
         messages.append({"role": "user", "content": instruction})
 
-        response = completion(
-            model=self.model,
-            messages=messages
-        )
-        return response.choices[0].message.content.strip()
+        try:
+            response = completion(
+                model=self.model,
+                messages=messages
+            )
+            return response.choices[0].message.content.strip()
+        except Exception as e:
+            raise Exception(f"LiteLLM Error: {str(e)}")
 
 class MindSpaceAgent:
     def __init__(self, brain_type=None):
         # Default to brain type from config if not provided
-        bt = brain_type or getattr(config, "AGENT_BRAIN_TYPE", "cli")
+        bt = brain_type or config.AGENT_BRAIN_TYPE
         
         if bt == "litellm":
+            print(f"🧠 MindSpaceAgent: Initializing LiteLLM Brain (Model: {config.LITELLM_MODEL})")
             self.brain = LiteLLMBrain()
         else:
-            self.brain = GeminiCLIBrain()
+            print(f"🧠 MindSpaceAgent: Initializing Google GenAI SDK Brain (Model: {config.GEMINI_SDK_MODEL})")
+            self.brain = GoogleGenAIBrain()
 
     def run_command(self, instruction, context_files=None):
         return self.brain.run_command(instruction, context_files)
