@@ -33,3 +33,6 @@ PAGEINDEX_MODEL = "gemini/gemini-3-flash-preview"
 
 # CONVERSATION_HISTORY_LIMIT: Number of recent turns (user + assistant pairs) to keep in memory per channel.
 CONVERSATION_HISTORY_LIMIT = 20
+
+# OPENVIKING_DATA_PATH: Where OpenViking stores its vector DB (separate from the KB itself).
+OPENVIKING_DATA_PATH = "/home/yolo/repos/OpenVikingData"

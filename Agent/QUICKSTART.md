@@ -44,11 +44,37 @@ source ~/.zshrc
 ```
 
 ### Step 3.2: Config.py
-Verify the `BASE_STORAGE_PATH` in `config.py`. 
+Verify the paths in `config.py`:
 ```python
-BASE_STORAGE_PATH = "/home/yolo/repos/Thought"
-PAGEINDEX_MODEL = "gemini/gemini-3-flash"
+BASE_STORAGE_PATH = "/home/yolo/repos/Thought"       # your knowledge base
+OPENVIKING_DATA_PATH = "/home/yolo/repos/OpenVikingData"  # OpenViking vector DB
 ```
+
+### Step 3.3: OpenViking Configuration
+OpenViking requires its own config file with embedding and vision model credentials.
+
+Create `~/.openviking/ov.conf`:
+```json
+{
+  "embedding": {
+    "dense": {
+      "api_base": "<your-endpoint>",
+      "api_key": "<your-key>",
+      "provider": "openai",
+      "dimension": 1024,
+      "model": "<embedding-model-name>"
+    }
+  },
+  "vlm": {
+    "api_base": "<your-endpoint>",
+    "api_key": "<your-key>",
+    "provider": "openai",
+    "model": "<vision-model-name>"
+  }
+}
+```
+
+Supports `volcengine`, `openai`, and OpenAI-compatible providers.
 
 ## 4. Running the Agent
 

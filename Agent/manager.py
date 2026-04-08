@@ -29,8 +29,6 @@ class KnowledgeBaseManager:
         path = os.path.join(self.root_path, folder_name)
         if not os.path.exists(path):
             os.makedirs(path)
-            # Initialize core files as per design.md
-            self.write_file(os.path.join(path, "index.md"), f"# Index: {folder_name}\n\nAbstract: Initialized.")
             self.write_file(os.path.join(path, "stream_of_conscious.md"), f"# Stream of Consciousness: {folder_name}\n\n")
         return path
 
@@ -54,11 +52,11 @@ class KnowledgeBaseManager:
         subprocess.run(["git", "commit", "-m", message], cwd=self.root_path)
         self.viking.rebuild_index()
 
-    def get_channel_context(self, channel_name: str) -> list:
-        """Return Viking L0/L1 context for a single channel."""
-        return self.viking.get_channel_context(channel_name)
+    def get_channel_context(self, channel_name: str, query: str = "") -> str:
+        """Return Viking L1 context string for a single channel."""
+        return self.viking.get_channel_context(channel_name, query)
 
-    def get_global_context(self, query: str) -> list:
+    def get_global_context(self, query: str) -> str:
         """Return Viking context spanning all channel folders."""
         return self.viking.get_global_context(query)
 

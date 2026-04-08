@@ -10,7 +10,7 @@ from logger import logger
 
 class LLMBrain(ABC):
     @abstractmethod
-    def run_command(self, instruction, context_files=None):
+    def run_command(self, instruction: str, context: str = None) -> str:
         pass
 
     @abstractmethod
@@ -23,26 +23,8 @@ class GoogleGenAIBrain(LLMBrain):
         self.model = model
         self.client = genai.Client(api_key=config.GEMINI_API_KEY)
 
-    def run_command(self, instruction, context_files=None):
-        """Invoke Gemini SDK with optional context files."""
-        # Handle context files
-        context_content = ""
-        if context_files:
-            for f_path in context_files:
-                try:
-                    if os.path.exists(f_path):
-                        with open(f_path, "r") as f:
-                            content = f.read()
-                            context_content += f"\n--- Content of {f_path} ---\n{content}\n"
-                except Exception as e:
-                    logger.error(f"Error reading context file {f_path}: {e}")
-
-        # Construct full prompt
-        full_prompt = instruction
-        if context_content:
-            full_prompt = f"System Context (Files):\n{context_content}\n\nUser Message: {instruction}"
-
-        # API Call
+    def run_command(self, instruction: str, context: str = None) -> str:
+        full_prompt = f"System Context:\n{context}\n\nUser Message: {instruction}" if context else instruction
         try:
             response = self.client.models.generate_content(
                 model=self.model,
@@ -60,11 +42,11 @@ class GoogleGenAIBrain(LLMBrain):
             contents.append({"role": gemini_role, "parts": [{"text": content}]})
         contents.append({"role": "user", "parts": [{"text": message}]})
         try:
-            config = types.GenerateContentConfig(system_instruction=system_ctx) if system_ctx else None
+            cfg = types.GenerateContentConfig(system_instruction=system_ctx) if system_ctx else None
             response = self.client.models.generate_content(
                 model=self.model,
                 contents=contents,
-                config=config
+                config=cfg
             )
             return response.text.strip()
         except Exception as e:
@@ -76,30 +58,13 @@ class LiteLLMBrain(LLMBrain):
         if config.GEMINI_API_KEY:
             os.environ["GEMINI_API_KEY"] = config.GEMINI_API_KEY
 
-    def run_command(self, instruction, context_files=None):
-        """Invoke LLM using litellm with optional context files."""
+    def run_command(self, instruction: str, context: str = None) -> str:
         messages = []
-        context_content = ""
-        if context_files:
-            for f_path in context_files:
-                try:
-                    if os.path.exists(f_path):
-                        with open(f_path, "r") as f:
-                            content = f.read()
-                            context_content += f"\n--- Content of {f_path} ---\n{content}\n"
-                except Exception as e:
-                    logger.error(f"Error reading context file {f_path}: {e}")
-
-        if context_content:
-            messages.append({"role": "system", "content": f"You have access to the following context files to help answer the user prompt:\n{context_content}"})
-        
+        if context:
+            messages.append({"role": "system", "content": context})
         messages.append({"role": "user", "content": instruction})
-
         try:
-            response = completion(
-                model=self.model,
-                messages=messages
-            )
+            response = completion(model=self.model, messages=messages)
             return response.choices[0].message.content.strip()
         except Exception as e:
             raise Exception(f"LiteLLM Error: {str(e)}")
@@ -120,9 +85,7 @@ class LiteLLMBrain(LLMBrain):
 
 class MindSpaceAgent:
     def __init__(self, brain_type=None):
-        # Default to brain type from config if not provided
         bt = brain_type or config.AGENT_BRAIN_TYPE
-        
         if bt == "litellm":
             logger.info(f"🧠 MindSpaceAgent: Initializing LiteLLM Brain (Model: {config.LITELLM_MODEL})")
             self.brain = LiteLLMBrain()
@@ -130,20 +93,13 @@ class MindSpaceAgent:
             logger.info(f"🧠 MindSpaceAgent: Initializing Google GenAI SDK Brain (Model: {config.GEMINI_SDK_MODEL})")
             self.brain = GoogleGenAIBrain()
 
-    def run_command(self, instruction, context_files=None):
-        return self.brain.run_command(instruction, context_files)
+    def run_command(self, instruction: str, context: str = None) -> str:
+        return self.brain.run_command(instruction, context)
 
-    def engage_dialogue(self, user_message, channel_name, context_files=None, history=None, stream_content=""):
-        # Build system context: Viking index + stream of conscious as persistent memory
+    def engage_dialogue(self, user_message, channel_name, context=None, history=None, stream_content=""):
         system_parts = [f"You are a knowledge agent in Discord channel #{channel_name}."]
-        if context_files:
-            for f_path in context_files:
-                try:
-                    if os.path.exists(f_path):
-                        with open(f_path, "r") as f:
-                            system_parts.append(f"--- Channel Index ---\n{f.read()}")
-                except Exception:
-                    pass
+        if context:
+            system_parts.append(f"--- Channel Knowledge Base ---\n{context}")
         if stream_content:
             system_parts.append(f"--- Stream of Consciousness (extracted insights so far) ---\n{stream_content}")
         system_parts.append(

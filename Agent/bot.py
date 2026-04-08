@@ -99,7 +99,7 @@ class MindSpaceBot(discord.Client):
 
             elif cmd == "research":
                 await message.channel.send(f"🔬 Synthesizing research on: {args}...")
-                research_res = self.agent.run_command(f"Perform deep research on {args} using current KB context.", self.kb.get_channel_context(channel_name))
+                research_res = self.agent.run_command(f"Perform deep research on {args} using current KB context.", context=self.kb.get_channel_context(channel_name, query=args))
 
                 filename = f"RESEARCH-{datetime.date.today()}-{message.id}.md"
                 file_path = os.path.join(channel_path, filename)
@@ -121,7 +121,7 @@ class MindSpaceBot(discord.Client):
                 global_context = self.kb.get_global_context(args)
                 result = self.agent.run_command(
                     f"Using the full knowledge base context across all channels, answer this query comprehensively with citations: {args}",
-                    global_context
+                    context=global_context
                 )
                 filename = f"OMNI-{datetime.date.today()}-{message.id}.md"
                 file_path = os.path.join(channel_path, filename)
@@ -164,7 +164,7 @@ class MindSpaceBot(discord.Client):
             reply, thought = self.agent.engage_dialogue(
                 message.content,
                 channel_name,
-                context_files=self.kb.get_channel_context(channel_name),
+                context=self.kb.get_channel_context(channel_name, query=message.content),
                 history=self.kb.get_history(channel_name),
                 stream_content=self.kb.get_stream_content(channel_name)
             )
