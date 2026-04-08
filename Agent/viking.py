@@ -21,9 +21,15 @@ class VikingContextManager:
     def __init__(self, root_path: str):
         self.root_path = root_path
         self._channel_uris = {}  # channel_name → list of root_uris returned by add_resource()
+        self._ready = False
         if OPENVIKING_AVAILABLE:
-            self.client = ov.SyncOpenViking(path=config.OPENVIKING_DATA_PATH)
-            self.client.initialize()
+            try:
+                self.client = ov.SyncOpenViking(path=config.OPENVIKING_DATA_PATH)
+                self.client.initialize()
+                self._ready = True
+            except Exception as e:
+                from logger import logger
+                logger.warning(f"OpenViking not configured, falling back to filesystem. ({e})")
 
     def rebuild_index(self):
         """Re-index all .md files in the KB after every git commit."""
@@ -51,7 +57,7 @@ class VikingContextManager:
         - Without query: returns the channel-level L1 overview directly.
         """
         sanitized = _sanitize(channel_name)
-        if OPENVIKING_AVAILABLE:
+        if self._ready:
             try:
                 channel_uri = f"viking://resources/{sanitized}/"
                 if query:
@@ -74,7 +80,7 @@ class VikingContextManager:
         Traverse ALL channel folders — semantic search with no channel scope.
         Used exclusively by !omni.
         """
-        if OPENVIKING_AVAILABLE:
+        if self._ready:
             try:
                 results = self.client.find(query, limit=10)
                 parts = [self.client.overview(r["uri"]) for r in results.get("resources", [])]
@@ -92,7 +98,7 @@ class VikingContextManager:
         return "\n\n".join(parts)
 
     def close(self):
-        if OPENVIKING_AVAILABLE:
+        if self._ready:
             self.client.close()
 
 

@@ -1,7 +1,6 @@
 import os
 import subprocess
 import datetime
-from collections import deque
 import config
 from viking import VikingContextManager
 
@@ -11,7 +10,7 @@ class KnowledgeBaseManager:
         self.root_path = config.BASE_STORAGE_PATH
         self._ensure_repo_exists()
         self.viking = VikingContextManager(self.root_path)
-        self._conversation_history = {}  # channel_name → deque of (role, content)
+        self._history_cache = {}  # channel_name → bounded history string
 
     def _sanitize_name(self, name):
         """Standardize folder names for the filesystem."""
@@ -60,15 +59,42 @@ class KnowledgeBaseManager:
         """Return Viking context spanning all channel folders."""
         return self.viking.get_global_context(query)
 
-    def get_history(self, channel_name: str) -> list:
-        """Return recent conversation turns for the channel."""
-        return list(self._conversation_history.get(channel_name, []))
+    # --- Conversation History ---
+
+    def _trim(self, text: str) -> str:
+        """Trim text from the start to the next message boundary if over the char limit."""
+        if len(text) <= config.CONVERSATION_HISTORY_MAX_CHARS:
+            return text
+        overflow = len(text) - config.CONVERSATION_HISTORY_MAX_CHARS
+        cut = text.find("\n[", overflow)
+        return text[cut + 1:] if cut != -1 else ""
+
+    def _load_history(self, channel_name: str) -> str:
+        path = self.get_channel_path(channel_name)
+        history_file = os.path.join(path, "chat_history.txt")
+        if os.path.exists(history_file):
+            with open(history_file, "r") as f:
+                return self._trim(f.read())
+        return ""
+
+    def get_history(self, channel_name: str) -> str:
+        """Return the bounded conversation history string for the channel."""
+        if channel_name not in self._history_cache:
+            self._history_cache[channel_name] = self._load_history(channel_name)
+        return self._history_cache[channel_name]
 
     def append_history(self, channel_name: str, role: str, content: str):
-        """Append a turn to the channel's conversation history."""
-        if channel_name not in self._conversation_history:
-            self._conversation_history[channel_name] = deque(maxlen=config.CONVERSATION_HISTORY_LIMIT)
-        self._conversation_history[channel_name].append((role, content))
+        """Append a new turn to the history, trim if over limit, persist to disk."""
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+        entry = f"[{timestamp}] {role}:\n{content}\n\n"
+        current = self.get_history(channel_name)
+        updated = self._trim(current + entry)
+        self._history_cache[channel_name] = updated
+        path = self.get_channel_path(channel_name)
+        with open(os.path.join(path, "chat_history.txt"), "w") as f:
+            f.write(updated)
+
+    # --- Stream of Consciousness ---
 
     def get_stream_content(self, channel_name: str) -> str:
         """Read the current stream_of_conscious.md for the channel."""
@@ -81,6 +107,6 @@ class KnowledgeBaseManager:
 
     def list_untracked_files(self):
         """Find untracked files on disk for the !organize command."""
-        result = subprocess.run(["git", "ls-files", "--others", "--exclude-standard"], 
+        result = subprocess.run(["git", "ls-files", "--others", "--exclude-standard"],
                                 cwd=self.root_path, capture_output=True, text=True)
         return result.stdout.strip().split("\n") if result.stdout.strip() else []

@@ -96,12 +96,14 @@ class MindSpaceAgent:
     def run_command(self, instruction: str, context: str = None) -> str:
         return self.brain.run_command(instruction, context)
 
-    def engage_dialogue(self, user_message, channel_name, context=None, history=None, stream_content=""):
+    def engage_dialogue(self, user_message, channel_name, context=None, history: str = "", stream_content=""):
         system_parts = [f"You are a knowledge agent in Discord channel #{channel_name}."]
         if context:
             system_parts.append(f"--- Channel Knowledge Base ---\n{context}")
         if stream_content:
             system_parts.append(f"--- Stream of Consciousness (extracted insights so far) ---\n{stream_content}")
+        if history:
+            system_parts.append(f"--- Recent Conversation History ---\n{history}")
         system_parts.append(
             "Reply naturally to the user. "
             "If the message contains a valuable insight worth recording, append 'THOUGHT: [summary]' at the end. "
@@ -109,7 +111,7 @@ class MindSpaceAgent:
         )
         system_ctx = "\n\n".join(system_parts)
 
-        response = self.brain.chat(system_ctx, history or [], user_message)
+        response = self.brain.chat(system_ctx, [], user_message)
         reply = response
         thought = None
         if "THOUGHT:" in response:
