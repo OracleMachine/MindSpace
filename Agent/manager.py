@@ -24,11 +24,10 @@ class KnowledgeBaseManager:
 
     def get_channel_path(self, channel_name):
         """Get or create the specific path for a channel."""
-        folder_name = self._sanitize_name(channel_name)
-        path = os.path.join(self.root_path, folder_name)
+        path = os.path.join(self.root_path, channel_name)
         if not os.path.exists(path):
             os.makedirs(path)
-            self.write_file(os.path.join(path, "stream_of_conscious.md"), f"# Stream of Consciousness: {folder_name}\n\n")
+            self.write_file(os.path.join(path, "stream_of_conscious.md"), f"# Stream of Consciousness: {channel_name}\n\n")
         return path
 
     def write_file(self, file_path, content):
@@ -59,7 +58,7 @@ class KnowledgeBaseManager:
         """Return Viking context spanning all channel folders."""
         return self.viking.get_global_context(query)
 
-    # --- Conversation History ---
+    # --- Conversation History (in-memory only; seeded from Discord on startup) ---
 
     def _trim(self, text: str) -> str:
         """Trim text from the start to the next message boundary if over the char limit."""
@@ -69,30 +68,22 @@ class KnowledgeBaseManager:
         cut = text.find("\n[", overflow)
         return text[cut + 1:] if cut != -1 else ""
 
-    def _load_history(self, channel_name: str) -> str:
-        path = self.get_channel_path(channel_name)
-        history_file = os.path.join(path, "chat_history.txt")
-        if os.path.exists(history_file):
-            with open(history_file, "r") as f:
-                return self._trim(f.read())
-        return ""
+    def seed_history(self, channel_name: str, text: str):
+        """Populate in-memory history from Discord on startup."""
+        trimmed = self._trim(text)
+        if trimmed:
+            self._history_cache[channel_name] = trimmed
 
     def get_history(self, channel_name: str) -> str:
-        """Return the bounded conversation history string for the channel."""
-        if channel_name not in self._history_cache:
-            self._history_cache[channel_name] = self._load_history(channel_name)
-        return self._history_cache[channel_name]
+        """Return the in-memory conversation history string for the channel."""
+        return self._history_cache.get(channel_name, "")
 
     def append_history(self, channel_name: str, role: str, content: str):
-        """Append a new turn to the history, trim if over limit, persist to disk."""
+        """Append a new turn to the in-memory history and trim if over limit."""
         timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
         entry = f"[{timestamp}] {role}:\n{content}\n\n"
         current = self.get_history(channel_name)
-        updated = self._trim(current + entry)
-        self._history_cache[channel_name] = updated
-        path = self.get_channel_path(channel_name)
-        with open(os.path.join(path, "chat_history.txt"), "w") as f:
-            f.write(updated)
+        self._history_cache[channel_name] = self._trim(current + entry)
 
     # --- Stream of Consciousness ---
 

@@ -26,7 +26,7 @@ The system uses **VikingContextManager** (wrapping OpenViking) for context navig
 
 ### 3.1 The "One Server = One Repo" Rule
 
-Each Discord Server maps to a single Git repository at `BASE_STORAGE_PATH` (default: `/home/yolo/repos/Thought`).
+Each Discord Server maps to a single Git repository at `BASE_STORAGE_PATH` (default: `~/repos/Thought`).
 
 ### 3.2 Hierarchy Logic (Macro-to-Micro)
 

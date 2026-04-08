@@ -56,10 +56,9 @@ class VikingContextManager:
         - With query: semantic search limited to channel_uri, returns top overviews.
         - Without query: returns the channel-level L1 overview directly.
         """
-        sanitized = _sanitize(channel_name)
         if self._ready:
             try:
-                channel_uri = f"viking://resources/{sanitized}/"
+                channel_uri = f"viking://resources/{channel_name}/"
                 if query:
                     results = self.client.find(query, limit=3, target_uri=channel_uri)
                     parts = [self.client.overview(r["uri"]) for r in results.get("resources", [])]
@@ -69,7 +68,7 @@ class VikingContextManager:
             except Exception:
                 pass
         # Fallback: read stream_of_conscious.md
-        stream_file = os.path.join(self.root_path, sanitized, "stream_of_conscious.md")
+        stream_file = os.path.join(self.root_path, channel_name, "stream_of_conscious.md")
         if os.path.exists(stream_file):
             with open(stream_file, "r") as f:
                 return f.read()

@@ -46,8 +46,8 @@ source ~/.zshrc
 ### Step 3.2: Config.py
 Verify the paths in `config.py`:
 ```python
-BASE_STORAGE_PATH = "/home/yolo/repos/Thought"       # your knowledge base
-OPENVIKING_DATA_PATH = "/home/yolo/repos/OpenVikingData"  # OpenViking vector DB
+BASE_STORAGE_PATH = "~/repos/Thought"       # your knowledge base
+OPENVIKING_DATA_PATH = "~/repos/OpenVikingData"  # OpenViking vector DB
 ```
 
 ### Step 3.3: OpenViking Configuration

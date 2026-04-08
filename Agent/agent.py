@@ -98,12 +98,17 @@ class MindSpaceAgent:
 
     def engage_dialogue(self, user_message, channel_name, context=None, history: str = "", stream_content=""):
         system_parts = [f"You are a knowledge agent in Discord channel #{channel_name}."]
+        if history:
+            system_parts.append(
+                f"--- Recent Conversation History ---\n"
+                f"(Messages labeled 'assistant' are from this bot. "
+                f"All other names are Discord display names of human users.)\n\n"
+                f"{history}"
+            )
         if context:
             system_parts.append(f"--- Channel Knowledge Base ---\n{context}")
         if stream_content:
             system_parts.append(f"--- Stream of Consciousness (extracted insights so far) ---\n{stream_content}")
-        if history:
-            system_parts.append(f"--- Recent Conversation History ---\n{history}")
         system_parts.append(
             "Reply naturally to the user. "
             "If the message contains a valuable insight worth recording, append 'THOUGHT: [summary]' at the end. "

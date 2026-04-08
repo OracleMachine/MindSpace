@@ -24,6 +24,48 @@ class MindSpaceBot(discord.Client):
         logger.info(f'Logged in as {self.user} (ID: {self.user.id})')
         logger.info('------')
         await self._ensure_system_log(guild)
+        await self._sync_kb_channels(guild)
+        self.kb.viking.rebuild_index()
+        for channel in guild.text_channels:
+            if channel.name != "system-log":
+                await self._seed_channel_history(channel)
+
+    async def _sync_kb_channels(self, guild):
+        """Create Discord channels for any KB folders that don't have a matching channel."""
+        existing_names = {ch.name for ch in guild.text_channels}
+        root = os.path.expanduser(config.BASE_STORAGE_PATH)
+        try:
+            for entry in os.scandir(root):
+                if not entry.is_dir() or entry.name.startswith(".") or entry.name == "system-log":
+                    continue
+                channel_name = entry.name
+                self.kb.get_channel_path(channel_name)  # ensure stream_of_conscious.md exists
+                if channel_name not in existing_names:
+                    try:
+                        await guild.create_text_channel(channel_name)
+                        logger.info(f"Created Discord channel #{channel_name} for existing KB folder", guild)
+                    except Exception as e:
+                        logger.error(f"Could not create channel #{channel_name}: {e}", guild)
+        except Exception as e:
+            logger.error(f"Error syncing KB channels: {e}", guild)
+
+    async def _seed_channel_history(self, channel):
+        """Seed chat_history.txt from Discord message history if no local file exists."""
+        entries = []
+        try:
+            async for message in channel.history(limit=50, oldest_first=False):
+                if not message.content.strip():
+                    continue
+                role = "assistant" if message.author == self.user else message.author.display_name
+                timestamp = message.created_at.strftime("%Y-%m-%d %H:%M")
+                entries.append(f"[{timestamp}] {role}:\n{message.content}\n\n")
+        except Exception as e:
+            logger.error(f"Could not seed history for #{channel.name}: {e}")
+            return
+        if entries:
+            text = "".join(reversed(entries))  # oldest first
+            self.kb.seed_history(channel.name, text)
+            logger.info(f"Seeded #{channel.name} with {len(entries)} messages from Discord")
 
     async def on_guild_join(self, guild):
         """Enforce single-server constraint: leave immediately if already serving a server."""
@@ -169,7 +211,7 @@ class MindSpaceBot(discord.Client):
                 stream_content=self.kb.get_stream_content(channel_name)
             )
 
-            self.kb.append_history(channel_name, "user", message.content)
+            self.kb.append_history(channel_name, message.author.display_name, message.content)
             self.kb.append_history(channel_name, "assistant", reply)
 
             if thought:
