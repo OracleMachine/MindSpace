@@ -12,20 +12,33 @@ class MindSpaceBot(discord.Client):
         super().__init__(*args, **kwargs)
         logger.bind_bot(self)
         self.agent = MindSpaceAgent()
-        self.kb = None  # Single KnowledgeBaseManager, initialized on on_ready
+        self.kb = None  # Unified KnowledgeBaseManager, initialized in on_ready
 
     async def setup_hook(self):
         """Start background tasks."""
         self.loop.create_task(logger.process_log_queue())
 
     async def on_ready(self):
+        if not self.guilds:
+            logger.warning("Bot is not in any guilds.")
+            return
+
+        # Initialize the SINGLE KnowledgeBaseManager for the first guild
         guild = self.guilds[0]
-        self.kb = KnowledgeBaseManager(guild.name)
+        if self.kb is None:
+            self.kb = KnowledgeBaseManager(guild.name)
+            logger.info(f"Initialized KnowledgeBaseManager for server: {guild.name}")
+        
         logger.info(f'Logged in as {self.user} (ID: {self.user.id})')
         logger.info('------')
+        
         await self._ensure_system_log(guild)
         await self._sync_kb_channels(guild)
+        
+        # Initial indexing (full sync on startup)
         self.kb.viking.rebuild_index()
+        self.kb.pageindex.rebuild_index(self.kb.channels_path)
+        
         for channel in guild.text_channels:
             if channel.name != "system-log":
                 await self._seed_channel_history(channel)
@@ -71,11 +84,13 @@ class MindSpaceBot(discord.Client):
         """Enforce single-server constraint: leave immediately if already serving a server."""
         if self.kb is not None:
             logger.error(
-                f"Attempted to join a second server '{guild.name}'. This bot is single-server only. Leaving.",
-                list(self.guilds)[0]
+                f"Attempted to join a second server '{guild.name}'. This bot is SINGLE-SERVER ONLY. Leaving.",
+                self.guilds[0]
             )
             await guild.leave()
             return
+        
+        # If this is the first guild, it will be handled by on_ready if not already initialized
         self.kb = KnowledgeBaseManager(guild.name)
         await self._ensure_system_log(guild)
 
@@ -235,53 +250,40 @@ class MindSpaceBot(discord.Client):
 def _preflight_check():
     """
     Verify all required dependencies are installed and API keys are valid.
-    Raises RuntimeError with a descriptive message on any failure.
+    Uses lightweight checks to avoid redundant manager initialization.
     """
-    # 1. PageIndex: check install + validate API key with a live call
+    # 1. PageIndex: check install
     try:
-        from pageindex_manager import PageIndexManager
-        pi = PageIndexManager()
-        pi.validate()
+        from pageindex import PageIndexClient
     except ImportError:
         raise RuntimeError("PageIndex is not installed. Run: pip install pageindex")
-    except Exception as e:
-        raise RuntimeError(f"PageIndex validation failed: {e}")
 
-    # 2. OpenViking must be installed
+    # 2. OpenViking: check install
     try:
         import openviking as ov
     except ImportError:
         raise RuntimeError("OpenViking is not installed. Run: pip install openviking")
 
-    # 3. OpenViking: load config, check component health, validate API key with a live call
-    client = None
+    # 3. GitPython: check install
     try:
+        import git
+    except ImportError:
+        raise RuntimeError("GitPython is not installed. Run: pip install GitPython")
+
+    # 4. API Key Validation (Minimal live calls)
+    try:
+        # PageIndex validation
+        pi_client = PageIndexClient(api_key=config.PAGEINDEX_API_KEY)
+        pi_client.list_documents(limit=1)
+        
+        # OpenViking validation
         os.environ.setdefault("OPENVIKING_CONFIG_FILE", config.OPENVIKING_CONF_PATH)
-        client = ov.SyncOpenViking(path=config.OPENVIKING_DATA_PATH)
-        client.initialize()
-
-        # Component health (storage, index engine, etc.)
-        status = client.get_status()
-        if not status.is_healthy:
-            unhealthy = [name for name, comp in status.components.items() if not comp.is_healthy]
-            errors = "; ".join(status.errors) if status.errors else "no details"
-            raise RuntimeError(
-                f"OpenViking components unhealthy: {', '.join(unhealthy)}. Errors: {errors}"
-            )
-
-        # Live embedding call — this is what actually validates the API key
-        client.find("preflight check", limit=1)
-
-    except RuntimeError:
-        raise
+        ov_client = ov.SyncOpenViking(path=config.OPENVIKING_DATA_PATH)
+        ov_client.initialize()
+        ov_client.find("preflight check", limit=1)
+        ov_client.close()
     except Exception as e:
-        raise RuntimeError(f"OpenViking API key validation failed: {e}")
-    finally:
-        if client:
-            try:
-                client.close()
-            except Exception:
-                pass
+        raise RuntimeError(f"API key validation failed: {e}")
 
 
 if __name__ == "__main__":
