@@ -33,7 +33,7 @@ class MindSpaceBot(discord.Client):
     async def _sync_kb_channels(self, guild):
         """Create Discord channels for any KB folders that don't have a matching channel."""
         existing_names = {ch.name for ch in guild.text_channels}
-        root = os.path.expanduser(config.BASE_STORAGE_PATH)
+        root = config.CHANNELS_PATH
         try:
             for entry in os.scandir(root):
                 if not entry.is_dir() or entry.name.startswith(".") or entry.name == "system-log":
@@ -256,6 +256,7 @@ def _preflight_check():
     # 3. OpenViking: load config, check component health, validate API key with a live call
     client = None
     try:
+        os.environ.setdefault("OPENVIKING_CONFIG_FILE", config.OPENVIKING_CONF_PATH)
         client = ov.SyncOpenViking(path=config.OPENVIKING_DATA_PATH)
         client.initialize()
 

@@ -13,6 +13,7 @@ Required environment variables (export in `~/.zshrc`):
 ```bash
 export DISCORD_TOKEN="your_discord_bot_token"
 export GEMINI_API_KEY="your_gemini_api_key"
+export PAGEINDEX_API_KEY="your_pageindex_api_key"
 ```
 
 ## Architecture
@@ -22,17 +23,26 @@ MindSpace is a Discord bot that acts as a hierarchical knowledge agent. Philosop
 ### Key Data Flow
 
 1. Every Discord Server maps to a Git repo at `BASE_STORAGE_PATH` (`/home/yolo/repos/Thought`)
-2. Each Discord channel maps to a folder inside that repo
-3. Every channel folder always contains two core files:
-   - `INDEX.MD` — high-level context map (passed to LLM for navigation)
-   - `STREAM_OF_CONSCIOUS.MD` — running log of extracted thoughts
+2. Each Discord channel maps to a folder inside `Channels/` in that repo
+3. Every channel folder contains `stream_of_conscious.md` — running log of extracted thoughts
+
+### Repo Layout
+
+```
+Thought/
+├── Channels/              ← channel folders (one per Discord channel)
+│   ├── general/
+│   └── oil-war-research/
+├── openviking/            ← OpenViking vector DB data
+└── ov.conf                ← OpenViking config (uses ${GEMINI_API_KEY} env var)
+```
 
 ### Module Responsibilities
 
 - **`bot.py`** — `MindSpaceBot(discord.Client)`: The entry point. Handles `on_message` and routes to commands (`!organize`, `!consolidate`, `!research`), URL ingestion, file ingestion, or passive dialogue.
 - **`agent.py`** — `MindSpaceAgent`: Abstraction over LLM backends. Contains `GoogleGenAIBrain` (default, uses `google-genai` SDK) and `LiteLLMBrain`. Exposes `run_command()`, `engage_dialogue()`, `process_url()`, and `generate_commit_message()`.
 - **`manager.py`** — `KnowledgeBaseManager`: All filesystem and Git operations. Creates per-server repos, manages channel folders, appends thoughts, and performs `git commit` after every active command.
-- **`config.py`** — Centralized config. Key settings: `AGENT_BRAIN_TYPE` (`"sdk"` or `"litellm"`), `BASE_STORAGE_PATH`, `GEMINI_SDK_MODEL`.
+- **`config.py`** — Centralized config. Key settings: `AGENT_BRAIN_TYPE`, `BASE_STORAGE_PATH`, `CHANNELS_PATH`, `OPENVIKING_DATA_PATH`, `OPENVIKING_CONF_PATH`.
 - **`logger.py`** — `MindSpaceLogger`: Dual-output logger (console + Discord `#system-log` channel via async queue).
 
 ### LLM Brain Selection
@@ -41,13 +51,12 @@ Controlled by `config.AGENT_BRAIN_TYPE`:
 - `"sdk"` (default): `GoogleGenAIBrain` — uses `google.genai` SDK directly
 - `"litellm"`: `LiteLLMBrain` — uses LiteLLM for multi-provider support
 
-### OpenViking & PageIndex (Planned)
+### OpenViking & PageIndex
 
-Per `design.md`, these frameworks are **not yet integrated** but are specified for:
-- **OpenViking**: Context mapping — manages the `viking://` URI space; used to provide L0/L1 overview layers to Gemini so it can navigate the KB tree without reading every file. URI prefix `viking://` is already reserved in `config.OPENVIKING_URI_PREFIX`.
-- **PageIndex**: Deep document parsing — used during file ingestion to parse documents into reasoning trees and during `!research` to find specific facts across the KB.
+- **OpenViking** (`viking.py`): Semantic vector search. Indexes all `.md` files in `Channels/` into a vector DB at `Thought/openviking/`. Config at `Thought/ov.conf` (loaded via `OPENVIKING_CONFIG_FILE` env var set in code). Provides channel-scoped context for passive dialogue and global context for `!omni`.
+- **PageIndex** (`pageindex_manager.py`): Cloud service at `api.pageindex.ai`. Deep PDF document reasoning — uploads PDFs, builds tree structures, enables Q&A. Used during file ingestion (PDF) and `!research`. Requires `PAGEINDEX_API_KEY`.
 
-Currently, both roles are fulfilled by passing raw file contents directly to the LLM. Install with: `pip install openviking pageindex`
+Install: `pip install openviking pageindex`
 
 ### Discord Commands
 

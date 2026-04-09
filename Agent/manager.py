@@ -9,8 +9,9 @@ class KnowledgeBaseManager:
     def __init__(self, server_name):
         self.server_name = self._sanitize_name(server_name)
         self.root_path = config.BASE_STORAGE_PATH
+        self.channels_path = config.CHANNELS_PATH
         self._ensure_repo_exists()
-        self.viking = VikingContextManager(self.root_path)
+        self.viking = VikingContextManager(self.channels_path)
         self.pageindex = PageIndexManager()
         self._history_cache = {}  # channel_name → bounded history string
 
@@ -23,10 +24,11 @@ class KnowledgeBaseManager:
         if not os.path.exists(self.root_path):
             os.makedirs(self.root_path)
             subprocess.run(["git", "init"], cwd=self.root_path)
+        os.makedirs(self.channels_path, exist_ok=True)
 
     def get_channel_path(self, channel_name):
         """Get or create the specific path for a channel."""
-        path = os.path.join(self.root_path, channel_name)
+        path = os.path.join(self.channels_path, channel_name)
         if not os.path.exists(path):
             os.makedirs(path)
             self.write_file(os.path.join(path, "stream_of_conscious.md"), f"# Stream of Consciousness: {channel_name}\n\n")
@@ -51,7 +53,7 @@ class KnowledgeBaseManager:
         subprocess.run(["git", "add", "."], cwd=self.root_path)
         subprocess.run(["git", "commit", "-m", message], cwd=self.root_path)
         self.viking.rebuild_index()
-        self.pageindex.rebuild_index(self.root_path)
+        self.pageindex.rebuild_index(self.channels_path)
 
     def get_channel_context(self, channel_name: str, query: str = "") -> str:
         """Return Viking L1 context string for a single channel."""

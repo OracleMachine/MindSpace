@@ -17,6 +17,7 @@ class VikingContextManager:
     def __init__(self, root_path: str):
         self.root_path = root_path
         self._channel_uris = {}
+        os.environ.setdefault("OPENVIKING_CONFIG_FILE", config.OPENVIKING_CONF_PATH)
         self.client = ov.SyncOpenViking(path=config.OPENVIKING_DATA_PATH)
         self.client.initialize()
 
@@ -27,9 +28,10 @@ class VikingContextManager:
             if not entry.is_dir() or entry.name.startswith("."):
                 continue
             channel_name = entry.name
+            channel_uri = f"viking://resources/{channel_name}/"
             for file_path in glob_module.glob(os.path.join(entry.path, "**/*.md"), recursive=True):
                 try:
-                    result = self.client.add_resource(path=file_path)
+                    result = self.client.add_resource(path=file_path, parent=channel_uri)
                     uri = result.get("root_uri")
                     if uri:
                         self._channel_uris.setdefault(channel_name, []).append(uri)
