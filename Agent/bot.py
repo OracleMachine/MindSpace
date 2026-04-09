@@ -111,6 +111,27 @@ class MindSpaceBot(discord.Client):
         if channel:
             await channel.send(message)
 
+    async def send_message_safe(self, channel, content):
+        """Send a message, splitting into multiple parts if it exceeds Discord's 2000-char limit."""
+        if not content:
+            return
+        
+        # Split by 2000 chars, ideally at a newline
+        limit = 2000
+        while len(content) > limit:
+            # Try to find the last newline before the limit
+            split_at = content.rfind('\n', 0, limit)
+            if split_at == -1:
+                split_at = limit
+            
+            chunk = content[:split_at].strip()
+            if chunk:
+                await channel.send(chunk)
+            content = content[split_at:].strip()
+        
+        if content:
+            await channel.send(content)
+
     async def on_message(self, message):
         if message.author == self.user:
             return
@@ -131,7 +152,7 @@ class MindSpaceBot(discord.Client):
 
                 commit_msg = self.agent.generate_commit_message(f"Organized files in {channel_name}: {reasoning}")
                 self.kb.git_commit(commit_msg)
-                await message.channel.send(f"✅ Organization complete. Reasoning: {reasoning}")
+                await self.send_message_safe(message.channel, f"✅ Organization complete. Reasoning: {reasoning}")
                 logger.info(f"**ORGANIZE**: {channel_name} - {commit_msg}", message.guild)
 
             elif cmd == "consolidate":
@@ -210,7 +231,7 @@ class MindSpaceBot(discord.Client):
 
             commit_msg = self.agent.generate_commit_message(f"Ingested webpage snapshot: {filename}")
             self.kb.git_commit(commit_msg)
-            await message.channel.send(f"✅ Link ingested and snapshotted: {file_path}")
+            await self.send_message_safe(message.channel, f"✅ Link ingested and snapshotted: {file_path}")
             logger.info(f"**INGEST (URL)**: {message.content[:50]}... -> `{filename}`", message.guild)
 
         elif message.attachments:
@@ -225,7 +246,7 @@ class MindSpaceBot(discord.Client):
 
                 commit_msg = self.agent.generate_commit_message(f"Ingested file: {attachment.filename}")
                 self.kb.git_commit(commit_msg)
-                await message.channel.send(f"✅ File ingested: {attachment.filename}. Analysis: {analysis}")
+                await self.send_message_safe(message.channel, f"✅ File ingested: {attachment.filename}. Analysis: {analysis}")
                 logger.info(f"**INGEST (FILE)**: `{attachment.filename}` in {channel_name}", message.guild)
 
         # --- 3. PASSIVE THOUGHT RECORDING (Active Dialogue) ---
@@ -245,7 +266,7 @@ class MindSpaceBot(discord.Client):
                 self.kb.append_thought(channel_name, thought)
                 logger.info(f"💭 **THOUGHT**: Extracted in {channel_name}: {thought}", message.guild)
 
-            await message.channel.send(reply)
+            await self.send_message_safe(message.channel, reply)
 
 def _preflight_check():
     """
