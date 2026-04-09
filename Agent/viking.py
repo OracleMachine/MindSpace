@@ -21,22 +21,28 @@ class VikingContextManager:
         self.client = ov.SyncOpenViking(path=config.OPENVIKING_DATA_PATH)
         self.client.initialize()
 
+    def index_file(self, file_path: str, channel_name: str):
+        """Index a single .md file into its channel-scoped Viking URI."""
+        if not file_path.endswith(".md"):
+            return
+        channel_uri = f"viking://resources/{channel_name}/"
+        try:
+            result = self.client.add_resource(path=file_path, parent=channel_uri)
+            uri = result.get("root_uri")
+            if uri:
+                self._channel_uris.setdefault(channel_name, []).append(uri)
+        except Exception:
+            pass
+
     def rebuild_index(self):
-        """Re-index all .md files in the KB after every git commit."""
+        """Re-index all .md files in the KB. Used on startup."""
         self._channel_uris = {}
         for entry in os.scandir(self.root_path):
             if not entry.is_dir() or entry.name.startswith("."):
                 continue
             channel_name = entry.name
-            channel_uri = f"viking://resources/{channel_name}/"
             for file_path in glob_module.glob(os.path.join(entry.path, "**/*.md"), recursive=True):
-                try:
-                    result = self.client.add_resource(path=file_path, parent=channel_uri)
-                    uri = result.get("root_uri")
-                    if uri:
-                        self._channel_uris.setdefault(channel_name, []).append(uri)
-                except Exception:
-                    pass
+                self.index_file(file_path, channel_name)
         self.client.wait_processed()
 
     def get_channel_context(self, channel_name: str, query: str = "") -> str:
@@ -48,7 +54,9 @@ class VikingContextManager:
         channel_uri = f"viking://resources/{channel_name}/"
         if query:
             results = self.client.find(query, limit=3, target_uri=channel_uri)
-            parts = [self.client.overview(r["uri"]) for r in results.get("resources", [])]
+            # FindResult is a dataclass; use to_dict() for safe access
+            res_dict = results.to_dict()
+            parts = [self.client.overview(r["uri"]) for r in res_dict.get("resources", [])]
             return "\n\n".join(parts) if parts else ""
         else:
             return self.client.overview(channel_uri)
@@ -59,7 +67,8 @@ class VikingContextManager:
         Used exclusively by !omni.
         """
         results = self.client.find(query, limit=10)
-        parts = [self.client.overview(r["uri"]) for r in results.get("resources", [])]
+        res_dict = results.to_dict()
+        parts = [self.client.overview(r["uri"]) for r in res_dict.get("resources", [])]
         return "\n\n".join(parts) if parts else ""
 
     def close(self):

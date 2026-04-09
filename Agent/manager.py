@@ -1,16 +1,22 @@
 import os
-import subprocess
 import datetime
+import git
 import config
 from viking import VikingContextManager
 from pageindex_manager import PageIndexManager
+from logger import logger
 
 class KnowledgeBaseManager:
+    """
+    Unified manager for the MindSpace Knowledge Base.
+    Designed for a SINGLE server (One Server = One Repo).
+    Initialized once by the bot and shared as the primary state.
+    """
     def __init__(self, server_name):
         self.server_name = self._sanitize_name(server_name)
         self.root_path = config.BASE_STORAGE_PATH
         self.channels_path = config.CHANNELS_PATH
-        self._ensure_repo_exists()
+        self._repo = self._ensure_repo_exists()
         self.viking = VikingContextManager(self.channels_path)
         self.pageindex = PageIndexManager()
         self._history_cache = {}  # channel_name → bounded history string
@@ -20,11 +26,15 @@ class KnowledgeBaseManager:
         return name.replace(" ", "_").replace("-", "_")
 
     def _ensure_repo_exists(self):
-        """Ensure the root directory exists and is a Git repo."""
+        """Ensure the root directory exists and is a Git repo. Returns a Repo object."""
         if not os.path.exists(self.root_path):
             os.makedirs(self.root_path)
-            subprocess.run(["git", "init"], cwd=self.root_path)
+            repo = git.Repo.init(self.root_path)
+        else:
+            repo = git.Repo(self.root_path)
+        
         os.makedirs(self.channels_path, exist_ok=True)
+        return repo
 
     def get_channel_path(self, channel_name):
         """Get or create the specific path for a channel."""
@@ -49,11 +59,40 @@ class KnowledgeBaseManager:
             f.write(f"\n- [{timestamp}] {thought}")
 
     def git_commit(self, message):
-        """Perform a Git commit and rebuild both Viking and PageIndex indexes."""
-        subprocess.run(["git", "add", "."], cwd=self.root_path)
-        subprocess.run(["git", "commit", "-m", message], cwd=self.root_path)
-        self.viking.rebuild_index()
-        self.pageindex.rebuild_index(self.channels_path)
+        """
+        Perform a Git commit and lazily rebuild indexes for changed files only.
+        Replaces slow subprocess calls with GitPython.
+        """
+        # Find untracked and modified files before committing
+        changed_files = [item.a_path for item in self._repo.index.diff(None)]
+        untracked = self._repo.untracked_files
+        to_index = set(changed_files + untracked)
+
+        # Stage and commit
+        self._repo.git.add(A=True)
+        try:
+            self._repo.index.commit(message)
+        except Exception as e:
+            logger.warning(f"Git commit failed (likely no changes): {e}")
+
+        # Lazy Indexing: only re-index files that were actually modified/added
+        for file_rel_path in to_index:
+            abs_path = os.path.join(self.root_path, file_rel_path)
+            if not os.path.exists(abs_path):
+                continue
+            
+            # Re-index .md in Viking
+            if abs_path.endswith(".md"):
+                channel_name = os.path.relpath(abs_path, self.channels_path).split(os.sep)[0]
+                self.viking.index_file(abs_path, channel_name)
+            
+            # Re-index .pdf in PageIndex
+            elif abs_path.endswith(".pdf"):
+                channel_name = os.path.relpath(abs_path, self.channels_path).split(os.sep)[0]
+                try:
+                    self.pageindex.index_document(abs_path, channel_name)
+                except Exception:
+                    pass
 
     def get_channel_context(self, channel_name: str, query: str = "") -> str:
         """Return Viking L1 context string for a single channel."""
@@ -108,6 +147,5 @@ class KnowledgeBaseManager:
 
     def list_untracked_files(self):
         """Find untracked files on disk for the !organize command."""
-        result = subprocess.run(["git", "ls-files", "--others", "--exclude-standard"],
-                                cwd=self.root_path, capture_output=True, text=True)
-        return result.stdout.strip().split("\n") if result.stdout.strip() else []
+        return self._repo.untracked_files
+
