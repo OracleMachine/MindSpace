@@ -24,9 +24,12 @@ The system uses **VikingContextManager** (wrapping OpenViking) for context navig
 
 ## 3. Architecture & Filesystem Mapping
 
-### 3.1 The "One Server = One Repo" Rule
+### 3.1 The "One Server = One Repo" Rule (Single-Server Intent)
 
-Each Discord Server maps to a single Git repository at `BASE_STORAGE_PATH` (default: `~/repos/Thought`).
+**Strict Constraint:** This bot is designed to serve exactly **one** Discord server.
+- Each Discord Server maps to a single Git repository at `BASE_STORAGE_PATH` (default: `~/repos/Thought`).
+- If the bot is invited to a second server, it will automatically log an error and leave the second server immediately.
+- This ensures absolute data isolation and simplifies the filesystem mapping logic.
 
 ### 3.2 Hierarchy Logic (Macro-to-Micro)
 

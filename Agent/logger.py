@@ -13,6 +13,11 @@ logging.basicConfig(
     format='%(asctime)s [%(levelname)s] %(message)s',
     datefmt='%Y-%m-%d %H:%M:%S'
 )
+
+# Suppress noisy library-level DEBUG logs
+for logger_name in ["asyncio", "httpx", "urllib3", "discord", "google.genai", "httpcore"]:
+    logging.getLogger(logger_name).setLevel(logging.INFO)
+
 _internal_logger = logging.getLogger("MindSpace")
 
 class MindSpaceLogger:
