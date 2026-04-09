@@ -125,6 +125,32 @@ class MindSpaceAgent:
             thought = parts[1].strip()
         return reply, thought
 
+    def analyze_file(self, file_path: str, pageindex) -> tuple:
+        """
+        Analyze an uploaded file. Uses PageIndex for PDFs; reads raw content for other types.
+        Returns (doc_id_or_None, analysis_text).
+        """
+        ext = os.path.splitext(file_path)[1].lower()
+        channel_name = os.path.basename(os.path.dirname(file_path))
+        if ext == ".pdf":
+            try:
+                doc_id = pageindex.index_document(file_path, channel_name)
+                tree = pageindex.get_tree(doc_id)
+                prompt = (
+                    f"This PDF has been indexed. Its document tree structure:\n\n{tree}\n\n"
+                    f"Provide a one-sentence description of the document's content and purpose."
+                )
+                return doc_id, self.run_command(prompt)
+            except Exception:
+                pass
+        # Fallback: read raw content
+        try:
+            with open(file_path, "r", errors="ignore") as f:
+                raw = f.read(5000)
+        except Exception:
+            raw = ""
+        return None, self.run_command(f"Analyze this file content and summarize it:\n\n{raw}")
+
     def process_url(self, url, channel_name):
         """Fetch URL content and use LLM to summarize it."""
         try:
@@ -134,7 +160,7 @@ class MindSpaceAgent:
             soup = BeautifulSoup(resp.text, 'html.parser')
             for script_or_style in soup(["script", "style"]):
                 script_or_style.decompose()
-            text = soup.get_text(separator='\n')[:10000]
+            text = soup.get_text(separator='\n')
             prompt = (
                 f"Extract the main article content from this raw webpage text:\n\n{text}\n\n"
                 f"Format it as a clean Markdown file with a human-readable title. "

@@ -3,6 +3,7 @@ import subprocess
 import datetime
 import config
 from viking import VikingContextManager
+from pageindex_manager import PageIndexManager
 
 class KnowledgeBaseManager:
     def __init__(self, server_name):
@@ -10,6 +11,7 @@ class KnowledgeBaseManager:
         self.root_path = config.BASE_STORAGE_PATH
         self._ensure_repo_exists()
         self.viking = VikingContextManager(self.root_path)
+        self.pageindex = PageIndexManager()
         self._history_cache = {}  # channel_name → bounded history string
 
     def _sanitize_name(self, name):
@@ -45,10 +47,11 @@ class KnowledgeBaseManager:
             f.write(f"\n- [{timestamp}] {thought}")
 
     def git_commit(self, message):
-        """Perform a Git commit and rebuild the Viking index."""
+        """Perform a Git commit and rebuild both Viking and PageIndex indexes."""
         subprocess.run(["git", "add", "."], cwd=self.root_path)
         subprocess.run(["git", "commit", "-m", message], cwd=self.root_path)
         self.viking.rebuild_index()
+        self.pageindex.rebuild_index(self.root_path)
 
     def get_channel_context(self, channel_name: str, query: str = "") -> str:
         """Return Viking L1 context string for a single channel."""
@@ -57,6 +60,11 @@ class KnowledgeBaseManager:
     def get_global_context(self, query: str) -> str:
         """Return Viking context spanning all channel folders."""
         return self.viking.get_global_context(query)
+
+    def get_deep_context(self, channel_name: str, query: str) -> str:
+        """Return PageIndex deep Q&A result for a channel's indexed PDFs."""
+        channel_path = self.get_channel_path(channel_name)
+        return self.pageindex.query_channel(channel_name, channel_path, query)
 
     # --- Conversation History (in-memory only; seeded from Discord on startup) ---
 

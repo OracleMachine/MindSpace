@@ -141,7 +141,17 @@ class MindSpaceBot(discord.Client):
 
             elif cmd == "research":
                 await message.channel.send(f"🔬 Synthesizing research on: {args}...")
-                research_res = self.agent.run_command(f"Perform deep research on {args} using current KB context.", context=self.kb.get_channel_context(channel_name, query=args))
+                viking_context = self.kb.get_channel_context(channel_name, query=args)
+                deep_context = self.kb.get_deep_context(channel_name, args)
+                combined = ""
+                if viking_context:
+                    combined += f"--- Semantic Overview (Viking) ---\n{viking_context}\n\n"
+                if deep_context:
+                    combined += f"--- Deep Document Analysis (PageIndex) ---\n{deep_context}\n\n"
+                research_res = self.agent.run_command(
+                    f"Perform deep research on {args} using the provided KB context, citing specific sources.",
+                    context=combined or None
+                )
 
                 filename = f"RESEARCH-{datetime.date.today()}-{message.id}.md"
                 file_path = os.path.join(channel_path, filename)
@@ -194,7 +204,9 @@ class MindSpaceBot(discord.Client):
                 file_path = os.path.join(channel_path, attachment.filename)
                 await attachment.save(file_path)
 
-                analysis = self.agent.run_command(f"Analyze this file: {file_path}. Determine human-readable slug and placement.")
+                doc_id, analysis = self.agent.analyze_file(file_path, self.kb.pageindex)
+                if doc_id:
+                    logger.info(f"**PAGEINDEX**: Indexed `{attachment.filename}` doc_id={doc_id}", message.guild)
 
                 commit_msg = self.agent.generate_commit_message(f"Ingested file: {attachment.filename}")
                 self.kb.git_commit(commit_msg)
@@ -220,20 +232,78 @@ class MindSpaceBot(discord.Client):
 
             await message.channel.send(reply)
 
+def _preflight_check():
+    """
+    Verify all required dependencies are installed and API keys are valid.
+    Raises RuntimeError with a descriptive message on any failure.
+    """
+    # 1. PageIndex: check install + validate API key with a live call
+    try:
+        from pageindex_manager import PageIndexManager
+        pi = PageIndexManager()
+        pi.validate()
+    except ImportError:
+        raise RuntimeError("PageIndex is not installed. Run: pip install pageindex")
+    except Exception as e:
+        raise RuntimeError(f"PageIndex validation failed: {e}")
+
+    # 2. OpenViking must be installed
+    try:
+        import openviking as ov
+    except ImportError:
+        raise RuntimeError("OpenViking is not installed. Run: pip install openviking")
+
+    # 3. OpenViking: load config, check component health, validate API key with a live call
+    client = None
+    try:
+        client = ov.SyncOpenViking(path=config.OPENVIKING_DATA_PATH)
+        client.initialize()
+
+        # Component health (storage, index engine, etc.)
+        status = client.get_status()
+        if not status.is_healthy:
+            unhealthy = [name for name, comp in status.components.items() if not comp.is_healthy]
+            errors = "; ".join(status.errors) if status.errors else "no details"
+            raise RuntimeError(
+                f"OpenViking components unhealthy: {', '.join(unhealthy)}. Errors: {errors}"
+            )
+
+        # Live embedding call — this is what actually validates the API key
+        client.find("preflight check", limit=1)
+
+    except RuntimeError:
+        raise
+    except Exception as e:
+        raise RuntimeError(f"OpenViking API key validation failed: {e}")
+    finally:
+        if client:
+            try:
+                client.close()
+            except Exception:
+                pass
+
+
 if __name__ == "__main__":
     required_vars = {
         "DISCORD_TOKEN": config.DISCORD_TOKEN,
-        "GEMINI_API_KEY": config.GEMINI_API_KEY
+        "GEMINI_API_KEY": config.GEMINI_API_KEY,
+        "PAGEINDEX_API_KEY": config.PAGEINDEX_API_KEY,
     }
 
     missing = [var for var, val in required_vars.items() if not val]
-
     if missing:
-        logger.error(f"❌ Error: Missing required environment variables: {', '.join(missing)}")
+        logger.error(f"❌ Missing required environment variables: {', '.join(missing)}")
         logger.error("Please ensure they are exported in your ZSH environment (~/.zshrc).")
-    else:
-        logger.info("✅ Environment validated. Starting MindSpace Bot...")
-        intents = discord.Intents.default()
-        intents.message_content = True
-        bot = MindSpaceBot(intents=intents)
-        bot.run(config.DISCORD_TOKEN)
+        exit(1)
+
+    try:
+        _preflight_check()
+    except RuntimeError as e:
+        logger.error(f"❌ Preflight check failed: {e}")
+        exit(1)
+
+    logger.info("✅ Preflight passed. Starting MindSpace Bot...")
+    intents = discord.Intents.default()
+    intents.message_content = True
+    bot = MindSpaceBot(intents=intents)
+    bot.run(config.DISCORD_TOKEN)

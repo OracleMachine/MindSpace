@@ -37,6 +37,7 @@ Add the following to your `~/.zshrc` file:
 ```bash
 export DISCORD_TOKEN="your_discord_bot_token"
 export GEMINI_API_KEY="your_gemini_api_key_from_ai_studio"
+export PAGEINDEX_API_KEY="your_pageindex_api_key"  # from pageindex.ai
 ```
 Then, reload your shell:
 ```bash
