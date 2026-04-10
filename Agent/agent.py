@@ -105,10 +105,10 @@ class MindSpaceAgent:
                 f"All other names are Discord display names of human users.)\n\n"
                 f"{history}"
             )
-        if context:
-            system_parts.append(f"--- Channel Knowledge Base ---\n{context}")
         if stream_content:
             system_parts.append(f"--- Stream of Consciousness (extracted insights so far) ---\n{stream_content}")
+        if context:
+            system_parts.append(f"--- Channel Knowledge Base ---\n{context}")
         system_parts.append(
             "Reply naturally to the user. "
             "If the message contains a valuable insight worth recording, append 'THOUGHT: [summary]' at the end. "
