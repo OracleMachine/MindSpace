@@ -45,6 +45,26 @@ class VikingContextManager:
                 self.index_file(file_path, channel_name)
         self.client.wait_processed()
 
+    def _format_results(self, res_dict: dict) -> str:
+        """Helper to format semantic search results with match reasons and scores."""
+        parts = []
+        # Check both 'resources' and 'memories' as OpenViking might return both
+        all_matches = res_dict.get("resources", []) + res_dict.get("memories", [])
+        
+        for r in all_matches:
+            uri = r.get("uri")
+            score = r.get("score", 0)
+            reason = r.get("match_reason", "No reason provided")
+            overview = self.client.overview(uri)
+            
+            parts.append(
+                f"Source: {uri}\n"
+                f"Relevance Score: {score:.4f}\n"
+                f"Match Reason: {reason}\n"
+                f"Content Overview:\n{overview}"
+            )
+        return "\n\n---\n\n".join(parts)
+
     def get_channel_context(self, channel_name: str, query: str = "") -> str:
         """
         Return context string scoped to a single channel.
@@ -54,10 +74,7 @@ class VikingContextManager:
         channel_uri = f"viking://resources/{channel_name}/"
         if query:
             results = self.client.find(query, limit=3, target_uri=channel_uri)
-            # FindResult is a dataclass; use to_dict() for safe access
-            res_dict = results.to_dict()
-            parts = [self.client.overview(r["uri"]) for r in res_dict.get("resources", [])]
-            return "\n\n".join(parts) if parts else ""
+            return self._format_results(results.to_dict())
         else:
             return self.client.overview(channel_uri)
 
@@ -67,9 +84,7 @@ class VikingContextManager:
         Used exclusively by !omni.
         """
         results = self.client.find(query, limit=10)
-        res_dict = results.to_dict()
-        parts = [self.client.overview(r["uri"]) for r in res_dict.get("resources", [])]
-        return "\n\n".join(parts) if parts else ""
+        return self._format_results(results.to_dict())
 
     def close(self):
         self.client.close()
