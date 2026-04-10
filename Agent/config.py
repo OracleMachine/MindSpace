@@ -17,10 +17,13 @@ BASE_STORAGE_PATH = "/home/yolo/repos/Thought"
 OPENVIKING_URI_PREFIX = "viking://"
 
 # --- 4. Agent & LLM (Brain) Configuration ---
-# AGENT_BRAIN_TYPE: 
-# - "sdk": Use the new google-genai SDK (recommended)
-# - "litellm": Use LiteLLM for multi-provider support
-AGENT_BRAIN_TYPE = "sdk"
+# DIALOGUE_BRAIN_TYPE: brain for passive chat, URL/file analysis, commit messages
+# Options: "GoogleGenAISdk" (recommended) | "litellm" (LiteLLMBrain)
+DIALOGUE_BRAIN_TYPE = "GoogleGenAISdk"
+
+# COMMAND_BRAIN_TYPE: brain for !organize, !consolidate, !research, !omni
+# Gemini CLI adds web search, file I/O, and multi-step agentic loops beyond the API.
+COMMAND_BRAIN_TYPE = "gemini-cli"
 
 # GEMINI_SDK_MODEL: The model identifier for the new Google GenAI SDK.
 # Use the official preview name for Gemini 3 Flash.

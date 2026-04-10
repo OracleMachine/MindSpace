@@ -1,4 +1,5 @@
 import os
+import subprocess
 import requests
 from bs4 import BeautifulSoup
 from litellm import completion
@@ -90,18 +91,71 @@ class LiteLLMBrain(LLMBrain):
         except Exception as e:
             raise Exception(f"LiteLLM Error: {str(e)}")
 
-class MindSpaceAgent:
-    def __init__(self, brain_type=None):
-        bt = brain_type or config.AGENT_BRAIN_TYPE
-        if bt == "litellm":
-            logger.info(f"🧠 MindSpaceAgent: Initializing LiteLLM Brain (Model: {config.LITELLM_MODEL})")
-            self.brain = LiteLLMBrain()
-        else:
-            logger.info(f"🧠 MindSpaceAgent: Initializing Google GenAI SDK Brain (Model: {config.GEMINI_SDK_MODEL})")
-            self.brain = GoogleGenAIBrain()
+class GeminiCLIBrain(LLMBrain):
+    """
+    Delegates to the Gemini CLI (gemini -y).
+    Capabilities beyond the direct API: web search, file I/O, multi-step agentic loops.
+    Used for all commands (!organize, !consolidate, !research, !omni).
+    """
+
+    def __init__(self, yolo: bool = True):
+        self.yolo = yolo
+
+    def build_args(self) -> list[str]:
+        """Return subprocess args. Prompt is passed via stdin to avoid OS arg length limits."""
+        args = ["gemini"]
+        if self.yolo:
+            args.append("-y")
+        return args
+
+    def _build_prompt(self, instruction: str, context: str = None,
+                      system_ctx: str = None, history: list = None) -> str:
+        parts = []
+        if system_ctx:
+            parts.append(f"[System]\n{system_ctx}")
+        if history:
+            for role, content in history:
+                parts.append(f"[{role}]\n{content}")
+        if context:
+            parts.append(f"[Context]\n{context}")
+        parts.append(f"[User]\n{instruction}")
+        return "\n\n".join(parts)
 
     def run_command(self, instruction: str, context: str = None) -> str:
-        return self.brain.run_command(instruction, context)
+        prompt = self._build_prompt(instruction, context)
+        result = subprocess.run(
+            self.build_args(),
+            input=prompt,
+            capture_output=True, text=True, timeout=300
+        )
+        return result.stdout.strip() or result.stderr.strip()
+
+    def chat(self, system_ctx: str, history: list, message: str, tools: list = None) -> str:
+        # tools ignored — Gemini CLI manages its own tool loop internally
+        prompt = self._build_prompt(message, system_ctx=system_ctx, history=history)
+        return self.run_command(prompt)
+
+
+class MindSpaceAgent:
+    def __init__(self, brain_type=None):
+        # Dialogue brain: passive chat, URL/file analysis, commit messages (fast API calls)
+        dt = brain_type or config.DIALOGUE_BRAIN_TYPE
+        if dt == "litellm":
+            logger.info(f"🧠 MindSpaceAgent: Dialogue brain → LiteLLM (Model: {config.LITELLM_MODEL})")
+            self.brain = LiteLLMBrain()
+        elif dt == "GoogleGenAISdk":
+            logger.info(f"🧠 MindSpaceAgent: Dialogue brain → Google GenAI SDK (Model: {config.GEMINI_SDK_MODEL})")
+            self.brain = GoogleGenAIBrain()
+        else:
+            raise ValueError(f"Unknown DIALOGUE_BRAIN_TYPE: '{dt}'. Valid options: 'GoogleGenAISdk', 'litellm'")
+
+        # Command brain: !organize, !consolidate, !research, !omni (agentic, file I/O, web search)
+        logger.info("🖥️  MindSpaceAgent: Command brain → Gemini CLI (YOLO mode)")
+        self.cli_brain = GeminiCLIBrain()
+
+    def run_command(self, instruction: str, context: str = None) -> str:
+        """Execute a command via the Gemini CLI brain (file I/O, web search, agentic tasks)."""
+        return self.cli_brain.run_command(instruction, context)
 
     def engage_dialogue(self, user_message, channel_name, history: str = "", stream_content="", tools: list = None):
         system_parts = [f"You are a knowledge agent in Discord channel #{channel_name}."]
@@ -137,7 +191,7 @@ class MindSpaceAgent:
     def analyze_file(self, file_path: str, pageindex) -> tuple:
         """
         Analyze an uploaded file. Uses PageIndex for PDFs; reads raw content for other types.
-        Returns (doc_id_or_None, analysis_text).
+        Returns (doc_id_or_None, analysis_text). Uses dialogue brain (fast API call).
         """
         ext = os.path.splitext(file_path)[1].lower()
         channel_name = os.path.basename(os.path.dirname(file_path))
@@ -149,7 +203,7 @@ class MindSpaceAgent:
                     f"This PDF has been indexed. Its document tree structure:\n\n{tree}\n\n"
                     f"Provide a one-sentence description of the document's content and purpose."
                 )
-                return doc_id, self.run_command(prompt)
+                return doc_id, self.brain.run_command(prompt)
             except Exception:
                 pass
         # Fallback: read raw content
@@ -158,10 +212,10 @@ class MindSpaceAgent:
                 raw = f.read(5000)
         except Exception:
             raw = ""
-        return None, self.run_command(f"Analyze this file content and summarize it:\n\n{raw}")
+        return None, self.brain.run_command(f"Analyze this file content and summarize it:\n\n{raw}")
 
     def process_url(self, url, channel_name):
-        """Fetch URL content and use LLM to summarize it."""
+        """Fetch URL content and summarize via dialogue brain (fast API call)."""
         try:
             headers = {'User-Agent': 'Mozilla/5.0'}
             resp = requests.get(url, headers=headers, timeout=10)
@@ -175,10 +229,11 @@ class MindSpaceAgent:
                 f"Format it as a clean Markdown file with a human-readable title. "
                 f"Include the original URL ({url}) at the top."
             )
-            return self.run_command(prompt)
+            return self.brain.run_command(prompt)
         except Exception as e:
             return f"Error fetching URL: {str(e)}"
 
     def generate_commit_message(self, action_description):
+        """Generate a commit message via dialogue brain (lightweight, fast API call)."""
         prompt = f"Generate a one-sentence Git commit message explaining the intent behind this action: {action_description}"
-        return self.run_command(prompt)
+        return self.brain.run_command(prompt)

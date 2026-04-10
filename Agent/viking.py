@@ -2,6 +2,7 @@ import os
 import glob as glob_module
 import openviking as ov  # hard import — fails fast if package not installed
 import config
+from logger import logger
 
 
 class VikingContextManager:
