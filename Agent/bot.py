@@ -254,26 +254,9 @@ class MindSpaceBot(discord.Client):
                 logger.info(f"**INGEST (FILE)**: `{attachment.filename}` in {channel_name}", message.guild)
         # --- 3. PASSIVE THOUGHT RECORDING (Active Dialogue) ---
         else:
-            # Bind the channel_name to the local tools
-            # This ensures the LLM doesn't need to know the channel name
-            bound_local_search = functools.partial(
-                self.tools.search_channel_knowledge_base, 
-                channel_name=channel_name
-            )
-            functools.update_wrapper(bound_local_search, self.tools.search_channel_knowledge_base)
-
-            bound_list_files = functools.partial(
-                self.tools.list_channel_files,
-                channel_name=channel_name
-            )
-            functools.update_wrapper(bound_list_files, self.tools.list_channel_files)
-
-            available_tools = [
-                bound_local_search,
-                self.tools.search_global_knowledge_base,
-                bound_list_files,
-                self.tools.list_global_files
-            ]
+            # Bind the tools to the current channel
+            # This generates clean functions with no 'channel_name' in the signature
+            available_tools = self.tools.get_tools(channel_name)
             
             reply, thought = self.agent.engage_dialogue(
                 message.content,
