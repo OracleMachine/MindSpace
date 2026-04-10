@@ -14,6 +14,7 @@ class MindSpaceBot(discord.Client):
         logger.bind_bot(self)
         self.agent = MindSpaceAgent()
         self.kb = None  # Unified KnowledgeBaseManager, initialized in on_ready
+        self.tools = None # MindSpaceTools instance, initialized in on_ready
 
     async def setup_hook(self):
         """Start background tasks."""
@@ -28,7 +29,8 @@ class MindSpaceBot(discord.Client):
         guild = self.guilds[0]
         if self.kb is None:
             self.kb = KnowledgeBaseManager(guild.name)
-            logger.info(f"Initialized KnowledgeBaseManager for server: {guild.name}")
+            self.tools = MindSpaceTools(self.kb)
+            logger.info(f"Initialized KB and Tools for server: {guild.name}")
         
         logger.info(f'Logged in as {self.user} (ID: {self.user.id})')
         logger.info('------')
@@ -249,22 +251,29 @@ class MindSpaceBot(discord.Client):
                 self.kb.git_commit(commit_msg)
                 await self.send_message_safe(message.channel, f"✅ File ingested: {attachment.filename}. Analysis: {analysis}")
                 logger.info(f"**INGEST (FILE)**: `{attachment.filename}` in {channel_name}", message.guild)
-
         # --- 3. PASSIVE THOUGHT RECORDING (Active Dialogue) ---
         else:
-            ms_tools = MindSpaceTools(self.kb, channel_name)
+            from tools import current_channel_context
+            
+            # Gather tools
             available_tools = [
-                ms_tools.search_channel_knowledge_base,
-                ms_tools.search_global_knowledge_base
+                self.tools.search_channel_knowledge_base,
+                self.tools.search_global_knowledge_base
             ]
-
-            reply, thought = self.agent.engage_dialogue(
-                message.content,
-                channel_name,
-                history=self.kb.get_history(channel_name),
-                stream_content=self.kb.get_stream_content(channel_name),
-                tools=available_tools
-            )
+            
+            # Set the context variable for this specific task
+            # This is thread-safe and task-safe for concurrent messages
+            token = current_channel_context.set(channel_name)
+            try:
+                reply, thought = self.agent.engage_dialogue(
+                    message.content,
+                    channel_name,
+                    history=self.kb.get_history(channel_name),
+                    stream_content=self.kb.get_stream_content(channel_name),
+                    tools=available_tools
+                )
+            finally:
+                current_channel_context.reset(token)
 
             self.kb.append_history(channel_name, message.author.display_name, message.content)
             self.kb.append_history(channel_name, "assistant", reply)

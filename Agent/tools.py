@@ -1,10 +1,15 @@
+import contextvars
+
+# Context variable to hold the current channel name for the tool call
+# This ensures concurrency safety when multiple messages are handled at once.
+current_channel_context = contextvars.ContextVar("current_channel_context", default=None)
+
 class MindSpaceTools:
     """
     A collection of tools available to the MindSpace Agent for autonomous information retrieval.
     """
-    def __init__(self, kb, channel_name: str = None):
+    def __init__(self, kb):
         self.kb = kb
-        self.channel_name = channel_name
 
     def search_channel_knowledge_base(self, query: str) -> str:
         """
@@ -14,11 +19,12 @@ class MindSpaceTools:
         Args:
             query: The specific topic or question to search for in this channel.
         """
-        if not self.channel_name:
+        channel_name = current_channel_context.get()
+        if not channel_name:
             return "Error: No channel context bound to tools."
         
-        context = self.kb.get_channel_context(self.channel_name, query)
-        deep = self.kb.get_deep_context(self.channel_name, query)
+        context = self.kb.get_channel_context(channel_name, query)
+        deep = self.kb.get_deep_context(channel_name, query)
         combined = ""
         if context:
             combined += f"--- Semantic Overview (Viking) ---\n{context}\n\n"
