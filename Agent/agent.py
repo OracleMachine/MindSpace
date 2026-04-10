@@ -14,7 +14,7 @@ class LLMBrain(ABC):
         pass
 
     @abstractmethod
-    def chat(self, system_ctx: str, history: list, message: str) -> str:
+    def chat(self, system_ctx: str, history: list, message: str, tools: list = None) -> str:
         """Multi-turn dialogue with persistent system context and conversation history."""
         pass
 
@@ -34,7 +34,7 @@ class GoogleGenAIBrain(LLMBrain):
         except Exception as e:
             raise Exception(f"Google GenAI SDK Error: {str(e)}")
 
-    def chat(self, system_ctx: str, history: list, message: str) -> str:
+    def chat(self, system_ctx: str, history: list, message: str, tools: list = None) -> str:
         """Multi-turn call: system context via system_instruction, history as prior turns."""
         contents = []
         for role, content in history:
@@ -42,7 +42,14 @@ class GoogleGenAIBrain(LLMBrain):
             contents.append({"role": gemini_role, "parts": [{"text": content}]})
         contents.append({"role": "user", "parts": [{"text": message}]})
         try:
-            cfg = types.GenerateContentConfig(system_instruction=system_ctx) if system_ctx else None
+            kwargs = {}
+            if system_ctx:
+                kwargs["system_instruction"] = system_ctx
+            if tools:
+                kwargs["tools"] = tools
+                kwargs["automatic_function_calling"] = types.AutomaticFunctionCallingConfig(disable=False)
+            
+            cfg = types.GenerateContentConfig(**kwargs) if kwargs else None
             response = self.client.models.generate_content(
                 model=self.model,
                 contents=contents,
@@ -69,7 +76,7 @@ class LiteLLMBrain(LLMBrain):
         except Exception as e:
             raise Exception(f"LiteLLM Error: {str(e)}")
 
-    def chat(self, system_ctx: str, history: list, message: str) -> str:
+    def chat(self, system_ctx: str, history: list, message: str, tools: list = None) -> str:
         """Multi-turn call: system context as system message, history as prior turns."""
         messages = []
         if system_ctx:
@@ -96,7 +103,7 @@ class MindSpaceAgent:
     def run_command(self, instruction: str, context: str = None) -> str:
         return self.brain.run_command(instruction, context)
 
-    def engage_dialogue(self, user_message, channel_name, context=None, history: str = "", stream_content=""):
+    def engage_dialogue(self, user_message, channel_name, context=None, history: str = "", stream_content="", tools: list = None):
         system_parts = [f"You are a knowledge agent in Discord channel #{channel_name}."]
         if history:
             system_parts.append(
@@ -116,7 +123,7 @@ class MindSpaceAgent:
         )
         system_ctx = "\n\n".join(system_parts)
 
-        response = self.brain.chat(system_ctx, [], user_message)
+        response = self.brain.chat(system_ctx, [], user_message, tools=tools)
         reply = response
         thought = None
         if "THOUGHT:" in response:

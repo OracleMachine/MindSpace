@@ -251,12 +251,17 @@ class MindSpaceBot(discord.Client):
 
         # --- 3. PASSIVE THOUGHT RECORDING (Active Dialogue) ---
         else:
+            from tools import MindSpaceTools
+            ms_tools = MindSpaceTools(self.kb)
+            available_tools = [ms_tools.search_global_knowledge_base]
+
             reply, thought = self.agent.engage_dialogue(
                 message.content,
                 channel_name,
                 context=self.kb.get_channel_context(channel_name, query=message.content),
                 history=self.kb.get_history(channel_name),
-                stream_content=self.kb.get_stream_content(channel_name)
+                stream_content=self.kb.get_stream_content(channel_name),
+                tools=available_tools
             )
 
             self.kb.append_history(channel_name, message.author.display_name, message.content)
