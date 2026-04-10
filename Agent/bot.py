@@ -4,6 +4,7 @@ import datetime
 import config
 import asyncio
 from agent import MindSpaceAgent
+from tools import MindSpaceTools
 from manager import KnowledgeBaseManager
 from logger import logger
 
@@ -251,14 +252,15 @@ class MindSpaceBot(discord.Client):
 
         # --- 3. PASSIVE THOUGHT RECORDING (Active Dialogue) ---
         else:
-            from tools import MindSpaceTools
-            ms_tools = MindSpaceTools(self.kb)
-            available_tools = [ms_tools.search_global_knowledge_base]
+            ms_tools = MindSpaceTools(self.kb, channel_name)
+            available_tools = [
+                ms_tools.search_channel_knowledge_base,
+                ms_tools.search_global_knowledge_base
+            ]
 
             reply, thought = self.agent.engage_dialogue(
                 message.content,
                 channel_name,
-                context=self.kb.get_channel_context(channel_name, query=message.content),
                 history=self.kb.get_history(channel_name),
                 stream_content=self.kb.get_stream_content(channel_name),
                 tools=available_tools
