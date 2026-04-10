@@ -1,9 +1,3 @@
-import contextvars
-
-# Context variable to hold the current channel name for the tool call
-# This ensures concurrency safety when multiple messages are handled at once.
-current_channel_context = contextvars.ContextVar("current_channel_context", default=None)
-
 class MindSpaceTools:
     """
     A collection of tools available to the MindSpace Agent for autonomous information retrieval.
@@ -11,18 +5,47 @@ class MindSpaceTools:
     def __init__(self, kb):
         self.kb = kb
 
-    def search_channel_knowledge_base(self, query: str) -> str:
+    def list_files(self, channel_name: str = None) -> str:
+        """
+        List all files and sub-folders in a specific channel or the entire repository.
+        Use this to understand the physical structure of the knowledge base or to find specific filenames.
+
+        Args:
+            channel_name: Optional. The name of the channel folder to list. If omitted, lists the root directory.
+        """
+        import os
+        base_path = self.kb.channels_path if channel_name else self.kb.root_path
+        target_path = os.path.join(base_path, channel_name) if channel_name else base_path
+        
+        if not os.path.exists(target_path):
+            return f"Error: Path {target_path} does not exist."
+        
+        files = []
+        try:
+            for root, dirs, filenames in os.walk(target_path):
+                # Filter out hidden files/dirs
+                dirs[:] = [d for d in dirs if not d.startswith('.')]
+                for f in filenames:
+                    if not f.startswith('.'):
+                        rel_path = os.path.relpath(os.path.join(root, f), target_path)
+                        files.append(rel_path)
+            
+            if not files:
+                return "The folder is empty."
+            
+            return "Files in " + (channel_name or "root") + ":\n- " + "\n- ".join(sorted(files))
+        except Exception as e:
+            return f"Error listing files: {str(e)}"
+
+    def search_channel_knowledge_base(self, query: str, channel_name: str) -> str:
         """
         Search the knowledge base of the CURRENT Discord channel. 
         Always use this first if the user is asking about topics related to the current conversation or channel theme.
 
         Args:
             query: The specific topic or question to search for in this channel.
+            channel_name: The name of the channel to search. (Automatically provided by the bot).
         """
-        channel_name = current_channel_context.get()
-        if not channel_name:
-            return "Error: No channel context bound to tools."
-        
         context = self.kb.get_channel_context(channel_name, query)
         deep = self.kb.get_deep_context(channel_name, query)
         combined = ""

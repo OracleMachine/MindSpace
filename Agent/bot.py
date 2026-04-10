@@ -3,6 +3,7 @@ import os
 import datetime
 import config
 import asyncio
+import functools
 from agent import MindSpaceAgent
 from tools import MindSpaceTools
 from manager import KnowledgeBaseManager
@@ -253,27 +254,33 @@ class MindSpaceBot(discord.Client):
                 logger.info(f"**INGEST (FILE)**: `{attachment.filename}` in {channel_name}", message.guild)
         # --- 3. PASSIVE THOUGHT RECORDING (Active Dialogue) ---
         else:
-            from tools import current_channel_context
-            
-            # Gather tools
+            # Bind the channel_name to the local tools
+            # This ensures the LLM doesn't need to know the channel name
+            bound_local_search = functools.partial(
+                self.tools.search_channel_knowledge_base, 
+                channel_name=channel_name
+            )
+            functools.update_wrapper(bound_local_search, self.tools.search_channel_knowledge_base)
+
+            bound_list_files = functools.partial(
+                self.tools.list_files,
+                channel_name=channel_name
+            )
+            functools.update_wrapper(bound_list_files, self.tools.list_files)
+
             available_tools = [
-                self.tools.search_channel_knowledge_base,
-                self.tools.search_global_knowledge_base
+                bound_local_search,
+                self.tools.search_global_knowledge_base,
+                bound_list_files
             ]
             
-            # Set the context variable for this specific task
-            # This is thread-safe and task-safe for concurrent messages
-            token = current_channel_context.set(channel_name)
-            try:
-                reply, thought = self.agent.engage_dialogue(
-                    message.content,
-                    channel_name,
-                    history=self.kb.get_history(channel_name),
-                    stream_content=self.kb.get_stream_content(channel_name),
-                    tools=available_tools
-                )
-            finally:
-                current_channel_context.reset(token)
+            reply, thought = self.agent.engage_dialogue(
+                message.content,
+                channel_name,
+                history=self.kb.get_history(channel_name),
+                stream_content=self.kb.get_stream_content(channel_name),
+                tools=available_tools
+            )
 
             self.kb.append_history(channel_name, message.author.display_name, message.content)
             self.kb.append_history(channel_name, "assistant", reply)
