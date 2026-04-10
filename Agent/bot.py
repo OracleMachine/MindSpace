@@ -15,14 +15,17 @@ class MindSpaceBot(discord.Client):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         logger.bind_bot(self)
-        self.agent = MindSpaceAgent()
-        self.kb = None  # Unified KnowledgeBaseManager, initialized in on_ready
-        self.tools = None # MindSpaceTools instance, initialized in on_ready
+        self.agent = None  # initialized in setup_hook (inside the event loop)
+        self.kb = None     # initialized in on_ready (after guild info available)
+        self.tools = None
         self.tree = app_commands.CommandTree(self)
 
     async def setup_hook(self):
-        """Register slash commands on the tree and start background tasks."""
-        self.loop.create_task(logger.process_log_queue())
+        """Initialize the agent, register slash commands, and start background tasks.
+        Runs inside the event loop — genai.Client binds to the correct loop here.
+        """
+        self.agent = MindSpaceAgent()
+        self.log_task = self.loop.create_task(logger.process_log_queue())
 
         @self.tree.command(name="organize", description="Re-sync and organize the current channel's knowledge base folder.")
         async def cmd_organize(interaction: discord.Interaction):
@@ -321,6 +324,19 @@ WHEN DONE, output ONLY this markdown report (no other prose):
             text = "".join(reversed(entries))  # oldest first
             self.kb.seed_history(channel.name, text)
             logger.info(f"Seeded #{channel.name} with {len(entries)} messages from Discord")
+
+    async def close(self):
+        """Cleanly shut down: close GenAI client and cancel background tasks."""
+        if hasattr(self, 'log_task') and not self.log_task.done():
+            self.log_task.cancel()
+            try:
+                await self.log_task
+            except asyncio.CancelledError:
+                pass
+
+        if self.agent:
+            self.agent.close()
+        await super().close()
 
     async def on_guild_join(self, guild):
         """Enforce single-server constraint: leave immediately if already serving a server."""

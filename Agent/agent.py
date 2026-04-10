@@ -24,6 +24,9 @@ class GoogleGenAIBrain(LLMBrain):
         self.model = model
         self.client = genai.Client(api_key=config.GEMINI_API_KEY)
 
+    def close(self):
+        self.client.close()
+
     def run_command(self, instruction: str, context: str = None) -> str:
         full_prompt = f"System Context:\n{context}\n\nUser Message: {instruction}" if context else instruction
         try:
@@ -156,6 +159,10 @@ class MindSpaceAgent:
     def run_command(self, instruction: str, context: str = None) -> str:
         """Execute a command via the Gemini CLI brain (file I/O, web search, agentic tasks)."""
         return self.cli_brain.run_command(instruction, context)
+
+    def close(self):
+        if hasattr(self.brain, 'close'):
+            self.brain.close()
 
     def engage_dialogue(self, user_message, channel_name, history: str = "", stream_content="", tools: list = None):
         system_parts = [f"You are a knowledge agent in Discord channel #{channel_name}."]
