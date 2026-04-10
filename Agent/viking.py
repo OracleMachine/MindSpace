@@ -45,17 +45,22 @@ class VikingContextManager:
                 self.index_file(file_path, channel_name)
         self.client.wait_processed()
 
-    def _format_results(self, res_dict: dict) -> str:
+    def _format_results(self, res_dict: dict, query: str) -> str:
         """Helper to format semantic search results with match reasons and scores."""
         parts = []
-        # Check both 'resources' and 'memories' as OpenViking might return both
+        # Check both 'resources' and 'memories'
         all_matches = res_dict.get("resources", []) + res_dict.get("memories", [])
         
-        for r in all_matches:
+        logger.info(f"🔍 OpenViking: Found {len(all_matches)} semantic matches for query: '{query}'")
+        
+        for i, r in enumerate(all_matches):
             uri = r.get("uri")
             score = r.get("score", 0)
             reason = r.get("match_reason", "No reason provided")
             overview = self.client.overview(uri)
+            
+            logger.debug(f"  Match #{i+1}: {uri} (Score: {score:.4f})")
+            logger.debug(f"  Reason: {reason}")
             
             parts.append(
                 f"Source: {uri}\n"
@@ -73,9 +78,11 @@ class VikingContextManager:
         """
         channel_uri = f"viking://resources/{channel_name}/"
         if query:
+            logger.info(f"🔎 OpenViking: Searching channel #{channel_name} for '{query}'...")
             results = self.client.find(query, limit=3, target_uri=channel_uri)
-            return self._format_results(results.to_dict())
+            return self._format_results(results.to_dict(), query)
         else:
+            logger.info(f"📖 OpenViking: Retrieving base overview for channel #{channel_name}")
             return self.client.overview(channel_uri)
 
     def get_global_context(self, query: str) -> str:
@@ -83,8 +90,9 @@ class VikingContextManager:
         Traverse ALL channel folders — semantic search with no channel scope.
         Used exclusively by !omni.
         """
+        logger.info(f"🌐 OpenViking: Global search for '{query}'...")
         results = self.client.find(query, limit=10)
-        return self._format_results(results.to_dict())
+        return self._format_results(results.to_dict(), query)
 
     def close(self):
         self.client.close()
