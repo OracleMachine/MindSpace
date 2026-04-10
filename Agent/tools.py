@@ -5,25 +5,23 @@ class MindSpaceTools:
     def __init__(self, kb):
         self.kb = kb
 
-    def list_files(self, channel_name: str = None) -> str:
+    def list_channel_files(self, channel_name: str) -> str:
         """
-        List all files and sub-folders in a specific channel or the entire repository.
-        Use this to understand the physical structure of the knowledge base or to find specific filenames.
+        List all files and sub-folders in the CURRENT Discord channel.
+        Use this to understand what research or articles are stored in the active channel.
 
         Args:
-            channel_name: Optional. The name of the channel folder to list. If omitted, lists the root directory.
+            channel_name: The name of the channel to list. (Automatically provided by the bot).
         """
         import os
-        base_path = self.kb.channels_path if channel_name else self.kb.root_path
-        target_path = os.path.join(base_path, channel_name) if channel_name else base_path
+        target_path = os.path.join(self.kb.channels_path, channel_name)
         
         if not os.path.exists(target_path):
-            return f"Error: Path {target_path} does not exist."
+            return f"Error: Channel folder {channel_name} does not exist."
         
         files = []
         try:
             for root, dirs, filenames in os.walk(target_path):
-                # Filter out hidden files/dirs
                 dirs[:] = [d for d in dirs if not d.startswith('.')]
                 for f in filenames:
                     if not f.startswith('.'):
@@ -31,11 +29,25 @@ class MindSpaceTools:
                         files.append(rel_path)
             
             if not files:
-                return "The folder is empty."
+                return f"The channel #{channel_name} is empty."
             
-            return "Files in " + (channel_name or "root") + ":\n- " + "\n- ".join(sorted(files))
+            return f"Files in #{channel_name}:\n- " + "\n- ".join(sorted(files))
         except Exception as e:
-            return f"Error listing files: {str(e)}"
+            return f"Error listing channel files: {str(e)}"
+
+    def list_global_files(self) -> str:
+        """
+        List all channels and top-level folders in the ENTIRE repository.
+        Use this to see which channels exist in the knowledge base.
+        """
+        import os
+        try:
+            channels = [d for d in os.listdir(self.kb.channels_path) if os.path.isdir(os.path.join(self.kb.channels_path, d)) and not d.startswith('.')]
+            if not channels:
+                return "The repository contains no channel folders."
+            return "Available Channels in KB:\n- " + "\n- ".join(sorted(channels))
+        except Exception as e:
+            return f"Error listing global files: {str(e)}"
 
     def search_channel_knowledge_base(self, query: str, channel_name: str) -> str:
         """

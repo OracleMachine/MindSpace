@@ -263,15 +263,16 @@ class MindSpaceBot(discord.Client):
             functools.update_wrapper(bound_local_search, self.tools.search_channel_knowledge_base)
 
             bound_list_files = functools.partial(
-                self.tools.list_files,
+                self.tools.list_channel_files,
                 channel_name=channel_name
             )
-            functools.update_wrapper(bound_list_files, self.tools.list_files)
+            functools.update_wrapper(bound_list_files, self.tools.list_channel_files)
 
             available_tools = [
                 bound_local_search,
                 self.tools.search_global_knowledge_base,
-                bound_list_files
+                bound_list_files,
+                self.tools.list_global_files
             ]
             
             reply, thought = self.agent.engage_dialogue(
