@@ -4,6 +4,7 @@ import datetime
 import config
 import asyncio
 import functools
+from discord import app_commands
 from agent import MindSpaceAgent
 from tools import MindSpaceTools
 from manager import KnowledgeBaseManager
@@ -16,6 +17,7 @@ class MindSpaceBot(discord.Client):
         self.agent = MindSpaceAgent()
         self.kb = None  # Unified KnowledgeBaseManager, initialized in on_ready
         self.tools = None # MindSpaceTools instance, initialized in on_ready
+        self.tree = app_commands.CommandTree(self)
 
     async def setup_hook(self):
         """Start background tasks."""
@@ -33,6 +35,14 @@ class MindSpaceBot(discord.Client):
             self.tools = MindSpaceTools(self.kb)
             logger.info(f"Initialized KB and Tools for server: {guild.name}")
         
+        # Sync Slash Commands
+        try:
+            self.tree.copy_global_to(guild=guild)
+            await self.tree.sync(guild=guild)
+            logger.info(f"Synced slash commands to guild: {guild.name}")
+        except Exception as e:
+            logger.error(f"Failed to sync slash commands: {e}")
+
         logger.info(f'Logged in as {self.user} (ID: {self.user.id})')
         logger.info('------')
         
@@ -46,6 +56,128 @@ class MindSpaceBot(discord.Client):
         for channel in guild.text_channels:
             if channel.name != "system-log":
                 await self._seed_channel_history(channel)
+
+    # --- CORE COMMAND LOGIC (Agnostic to Trigger) ---
+
+    async def handle_organize(self, channel, guild):
+        """Re-sync and organize knowledge base folders."""
+        await channel.send("🔄 Re-syncing and organizing knowledge base...")
+        channel_name = channel.name
+        untracked = self.kb.list_untracked_files()
+        reasoning = self.agent.run_command(f"Organize these new files: {untracked}. Decide semantic hierarchy.")
+
+        commit_msg = self.agent.generate_commit_message(f"Organized files in {channel_name}: {reasoning}")
+        self.kb.git_commit(commit_msg)
+        await self.send_message_safe(channel, f"✅ Organization complete. Reasoning: {reasoning}")
+        logger.info(f"**ORGANIZE**: {channel_name} - {commit_msg}", guild)
+
+    async def handle_consolidate(self, channel, guild, interaction_id=None):
+        """Synthesize stream of consciousness into a structured permanent article."""
+        await channel.send("📑 Consolidating stream of consciousness...")
+        channel_name = channel.name
+        channel_path = self.kb.get_channel_path(channel_name)
+        stream_file = os.path.join(channel_path, "stream_of_conscious.md")
+
+        with open(stream_file, "r") as f:
+            content = f.read()
+
+        synthesis = self.agent.run_command(f"Synthesize these thoughts into a structured permanent article:\n\n{content}")
+        # Use interaction_id or a generic timestamp if triggered by prefix
+        suffix = interaction_id or int(datetime.datetime.now().timestamp())
+        filename = f"ARTICLE-{datetime.date.today()}-{suffix}.md"
+        file_path = os.path.join(channel_path, filename)
+        self.kb.write_file(file_path, synthesis)
+
+        self.kb.write_file(stream_file, f"# Stream of Consciousness: {channel_name}\n\n")
+
+        commit_msg = self.agent.generate_commit_message(f"Consolidated thoughts in {channel_name} into {filename}")
+        self.kb.git_commit(commit_msg)
+
+        await channel.send(f"✅ Consolidation complete. Saved to: {file_path}", file=discord.File(file_path))
+        logger.info(f"**CONSOLIDATE**: {channel_name} -> `{filename}`", guild)
+
+    async def handle_research(self, channel, guild, topic, interaction_id=None):
+        """Deep-dive on topic using current channel KB context."""
+        await channel.send(f"🔬 Synthesizing research on: {topic}...")
+        channel_name = channel.name
+        channel_path = self.kb.get_channel_path(channel_name)
+        
+        viking_context = self.kb.get_channel_context(channel_name, query=topic)
+        deep_context = self.kb.get_deep_context(channel_name, topic)
+        combined = ""
+        if viking_context:
+            combined += f"--- Semantic Overview (Viking) ---\n{viking_context}\n\n"
+        if deep_context:
+            combined += f"--- Deep Document Analysis (PageIndex) ---\n{deep_context}\n\n"
+        
+        research_res = self.agent.run_command(
+            f"Perform deep research on {topic} using the provided KB context, citing specific sources.",
+            context=combined or None
+        )
+
+        suffix = interaction_id or int(datetime.datetime.now().timestamp())
+        filename = f"RESEARCH-{datetime.date.today()}-{suffix}.md"
+        file_path = os.path.join(channel_path, filename)
+
+        lineage = f"\n\n---\n**Lineage:**\n- Path: {file_path}\n- URI: viking://{guild.name}/{channel_name}/{filename}"
+        self.kb.write_file(file_path, research_res + lineage)
+
+        commit_msg = self.agent.generate_commit_message(f"Research synthesis on {topic}")
+        self.kb.git_commit(commit_msg)
+
+        await channel.send(f"✅ Research complete.", file=discord.File(file_path))
+        logger.info(f"**RESEARCH**: {topic} in {channel_name}", guild)
+
+    async def handle_omni(self, channel, guild, query, interaction_id=None):
+        """Cross-KB synthesis across all channel folders."""
+        await channel.send(f"🌐 Traversing entire knowledge base for: {query}...")
+        channel_name = channel.name
+        channel_path = self.kb.get_channel_path(channel_name)
+        
+        global_context = self.kb.get_global_context(query)
+        result = self.agent.run_command(
+            f"Using the full knowledge base context across all channels, answer this query comprehensively with citations: {query}",
+            context=global_context
+        )
+        suffix = interaction_id or int(datetime.datetime.now().timestamp())
+        filename = f"OMNI-{datetime.date.today()}-{suffix}.md"
+        file_path = os.path.join(channel_path, filename)
+        lineage = f"\n\n---\n**Lineage:**\n- Path: {file_path}\n- URI: viking://{guild.name}/omni/{filename}"
+        self.kb.write_file(file_path, result + lineage)
+        commit_msg = self.agent.generate_commit_message(f"Omni query synthesis: {query}")
+        self.kb.git_commit(commit_msg)
+        await channel.send(f"✅ Omni search complete.", file=discord.File(file_path))
+        logger.info(f"**OMNI**: {query}", guild)
+
+    # --- SLASH COMMAND WRAPPERS ---
+
+    @app_commands.command(name="organize", description="Re-sync and organize knowledge base folders.")
+    async def slash_organize(self, interaction: discord.Interaction):
+        await interaction.response.defer(thinking=True)
+        # Use followup.send or similar if logic is extracted, but for now we reuse handle_
+        await interaction.followup.send("🔄 Triggering organization...")
+        await self.handle_organize(interaction.channel, interaction.guild)
+
+    @app_commands.command(name="consolidate", description="Synthesize stream of consciousness into a structured article.")
+    async def slash_consolidate(self, interaction: discord.Interaction):
+        await interaction.response.defer(thinking=True)
+        await interaction.followup.send("📑 Triggering consolidation...")
+        await self.handle_consolidate(interaction.channel, interaction.guild, interaction.id)
+
+    @app_commands.command(name="research", description="Deep-dive research on a topic using KB context.")
+    @app_commands.describe(topic="The specific topic to research")
+    async def slash_research(self, interaction: discord.Interaction, topic: str):
+        await interaction.response.defer(thinking=True)
+        await interaction.followup.send(f"🔬 Triggering research on {topic}...")
+        await self.handle_research(interaction.channel, interaction.guild, topic, interaction.id)
+
+    @app_commands.command(name="omni", description="Cross-KB synthesis across all channels.")
+    @app_commands.describe(query="The broad query to search across the entire repository")
+    async def slash_omni(self, interaction: discord.Interaction, query: str):
+        await interaction.response.defer(thinking=True)
+        await interaction.followup.send(f"🌐 Triggering omni search for {query}...")
+        await self.handle_omni(interaction.channel, interaction.guild, query, interaction.id)
+
 
     async def _sync_kb_channels(self, guild):
         """Create Discord channels for any KB folders that don't have a matching channel."""
@@ -136,93 +268,159 @@ class MindSpaceBot(discord.Client):
         if content:
             await channel.send(content)
 
+    # --- CORE COMMAND LOGIC (Agnostic to Trigger) ---
+
+    async def handle_organize(self, channel, guild):
+        """Re-sync and organize knowledge base folders."""
+        await channel.send("🔄 Re-syncing and organizing knowledge base...")
+        channel_name = channel.name
+        untracked = self.kb.list_untracked_files()
+        reasoning = self.agent.run_command(f"Organize these new files: {untracked}. Decide semantic hierarchy.")
+
+        commit_msg = self.agent.generate_commit_message(f"Organized files in {channel_name}: {reasoning}")
+        self.kb.git_commit(commit_msg)
+        await self.send_message_safe(channel, f"✅ Organization complete. Reasoning: {reasoning}")
+        logger.info(f"**ORGANIZE**: {channel_name} - {commit_msg}", guild)
+
+    async def handle_consolidate(self, channel, guild, interaction_id=None):
+        """Synthesize stream of consciousness into a structured permanent article."""
+        await channel.send("📑 Consolidating stream of consciousness...")
+        channel_name = channel.name
+        channel_path = self.kb.get_channel_path(channel_name)
+        stream_file = os.path.join(channel_path, "stream_of_conscious.md")
+
+        with open(stream_file, "r") as f:
+            content = f.read()
+
+        synthesis = self.agent.run_command(f"Synthesize these thoughts into a structured permanent article:\n\n{content}")
+        # Use interaction_id or a generic timestamp if triggered by prefix
+        suffix = interaction_id or int(datetime.datetime.now().timestamp())
+        filename = f"ARTICLE-{datetime.date.today()}-{suffix}.md"
+        file_path = os.path.join(channel_path, filename)
+        self.kb.write_file(file_path, synthesis)
+
+        self.kb.write_file(stream_file, f"# Stream of Consciousness: {channel_name}\n\n")
+
+        commit_msg = self.agent.generate_commit_message(f"Consolidated thoughts in {channel_name} into {filename}")
+        self.kb.git_commit(commit_msg)
+
+        await channel.send(f"✅ Consolidation complete. Saved to: {file_path}", file=discord.File(file_path))
+        logger.info(f"**CONSOLIDATE**: {channel_name} -> `{filename}`", guild)
+
+    async def handle_research(self, channel, guild, topic, interaction_id=None):
+        """Deep-dive on topic using current channel KB context."""
+        await channel.send(f"🔬 Synthesizing research on: {topic}...")
+        channel_name = channel.name
+        channel_path = self.kb.get_channel_path(channel_name)
+        
+        viking_context = self.kb.get_channel_context(channel_name, query=topic)
+        deep_context = self.kb.get_deep_context(channel_name, topic)
+        combined = ""
+        if viking_context:
+            combined += f"--- Semantic Overview (Viking) ---\n{viking_context}\n\n"
+        if deep_context:
+            combined += f"--- Deep Document Analysis (PageIndex) ---\n{deep_context}\n\n"
+        
+        research_res = self.agent.run_command(
+            f"Perform deep research on {topic} using the provided KB context, citing specific sources.",
+            context=combined or None
+        )
+
+        suffix = interaction_id or int(datetime.datetime.now().timestamp())
+        filename = f"RESEARCH-{datetime.date.today()}-{suffix}.md"
+        file_path = os.path.join(channel_path, filename)
+
+        lineage = f"\n\n---\n**Lineage:**\n- Path: {file_path}\n- URI: viking://{guild.name}/{channel_name}/{filename}"
+        self.kb.write_file(file_path, research_res + lineage)
+
+        commit_msg = self.agent.generate_commit_message(f"Research synthesis on {topic}")
+        self.kb.git_commit(commit_msg)
+
+        await channel.send(f"✅ Research complete.", file=discord.File(file_path))
+        logger.info(f"**RESEARCH**: {topic} in {channel_name}", guild)
+
+    async def handle_omni(self, channel, guild, query, interaction_id=None):
+        """Cross-KB synthesis across all channel folders."""
+        await channel.send(f"🌐 Traversing entire knowledge base for: {query}...")
+        channel_name = channel.name
+        channel_path = self.kb.get_channel_path(channel_name)
+        
+        global_context = self.kb.get_global_context(query)
+        result = self.agent.run_command(
+            f"Using the full knowledge base context across all channels, answer this query comprehensively with citations: {query}",
+            context=global_context
+        )
+        suffix = interaction_id or int(datetime.datetime.now().timestamp())
+        filename = f"OMNI-{datetime.date.today()}-{suffix}.md"
+        file_path = os.path.join(channel_path, filename)
+        lineage = f"\n\n---\n**Lineage:**\n- Path: {file_path}\n- URI: viking://{guild.name}/omni/{filename}"
+        self.kb.write_file(file_path, result + lineage)
+        commit_msg = self.agent.generate_commit_message(f"Omni query synthesis: {query}")
+        self.kb.git_commit(commit_msg)
+        await channel.send(f"✅ Omni search complete.", file=discord.File(file_path))
+        logger.info(f"**OMNI**: {query}", guild)
+
+    # --- SLASH COMMAND WRAPPERS ---
+
+    @app_commands.command(name="organize", description="Re-sync and organize knowledge base folders.")
+    async def slash_organize(self, interaction: discord.Interaction):
+        await interaction.response.defer(thinking=True)
+        await interaction.followup.send("🔄 Triggering organization...")
+        await self.handle_organize(interaction.channel, interaction.guild)
+
+    @app_commands.command(name="consolidate", description="Synthesize stream of consciousness into a structured article.")
+    async def slash_consolidate(self, interaction: discord.Interaction):
+        await interaction.response.defer(thinking=True)
+        await interaction.followup.send("📑 Triggering consolidation...")
+        await self.handle_consolidate(interaction.channel, interaction.guild, interaction.id)
+
+    @app_commands.command(name="research", description="Deep-dive research on a topic using KB context.")
+    @app_commands.describe(topic="The specific topic to research")
+    async def slash_research(self, interaction: discord.Interaction, topic: str):
+        await interaction.response.defer(thinking=True)
+        await interaction.followup.send(f"🔬 Triggering research on {topic}...")
+        await self.handle_research(interaction.channel, interaction.guild, topic, interaction.id)
+
+    @app_commands.command(name="omni", description="Cross-KB synthesis across all channels.")
+    @app_commands.describe(query="The broad query to search across the entire repository")
+    async def slash_omni(self, interaction: discord.Interaction, query: str):
+        await interaction.response.defer(thinking=True)
+        await interaction.followup.send(f"🌐 Triggering omni search for {query}...")
+        await self.handle_omni(interaction.channel, interaction.guild, query, interaction.id)
+
     async def on_message(self, message):
         if message.author == self.user:
+            return
+
+        # Ignore messages that are handled as slash commands
+        if message.content.startswith('/'):
             return
 
         channel_name = message.channel.name
         channel_path = self.kb.get_channel_path(channel_name)
 
-        # --- 1. HANDLE ACTIVE COMMANDS ---
+        # --- 1. HANDLE ACTIVE COMMANDS (Prefix Parity) ---
         if message.content.startswith('!'):
             command_parts = message.content[1:].split(' ', 1)
             cmd = command_parts[0].lower()
             args = command_parts[1] if len(command_parts) > 1 else ""
 
             if cmd == "organize":
-                await message.channel.send("🔄 Re-syncing and organizing knowledge base...")
-                untracked = self.kb.list_untracked_files()
-                reasoning = self.agent.run_command(f"Organize these new files: {untracked}. Decide semantic hierarchy.")
-
-                commit_msg = self.agent.generate_commit_message(f"Organized files in {channel_name}: {reasoning}")
-                self.kb.git_commit(commit_msg)
-                await self.send_message_safe(message.channel, f"✅ Organization complete. Reasoning: {reasoning}")
-                logger.info(f"**ORGANIZE**: {channel_name} - {commit_msg}", message.guild)
-
+                await self.handle_organize(message.channel, message.guild)
             elif cmd == "consolidate":
-                await message.channel.send("📑 Consolidating stream of consciousness...")
-                stream_file = os.path.join(channel_path, "stream_of_conscious.md")
-
-                with open(stream_file, "r") as f:
-                    content = f.read()
-
-                synthesis = self.agent.run_command(f"Synthesize these thoughts into a structured permanent article:\n\n{content}")
-                filename = f"ARTICLE-{datetime.date.today()}-{message.id}.md"
-                file_path = os.path.join(channel_path, filename)
-                self.kb.write_file(file_path, synthesis)
-
-                self.kb.write_file(stream_file, f"# Stream of Consciousness: {channel_name}\n\n")
-
-                commit_msg = self.agent.generate_commit_message(f"Consolidated thoughts in {channel_name} into {filename}")
-                self.kb.git_commit(commit_msg)
-
-                await message.channel.send(f"✅ Consolidation complete. Saved to: {file_path}", file=discord.File(file_path))
-                logger.info(f"**CONSOLIDATE**: {channel_name} -> `{filename}`", message.guild)
-
+                await self.handle_consolidate(message.channel, message.guild, message.id)
             elif cmd == "research":
-                await message.channel.send(f"🔬 Synthesizing research on: {args}...")
-                viking_context = self.kb.get_channel_context(channel_name, query=args)
-                deep_context = self.kb.get_deep_context(channel_name, args)
-                combined = ""
-                if viking_context:
-                    combined += f"--- Semantic Overview (Viking) ---\n{viking_context}\n\n"
-                if deep_context:
-                    combined += f"--- Deep Document Analysis (PageIndex) ---\n{deep_context}\n\n"
-                research_res = self.agent.run_command(
-                    f"Perform deep research on {args} using the provided KB context, citing specific sources.",
-                    context=combined or None
-                )
-
-                filename = f"RESEARCH-{datetime.date.today()}-{message.id}.md"
-                file_path = os.path.join(channel_path, filename)
-
-                lineage = f"\n\n---\n**Lineage:**\n- Path: {file_path}\n- Discord: {message.jump_url}\n- URI: viking://{message.guild.name}/{channel_name}/{filename}"
-                self.kb.write_file(file_path, research_res + lineage)
-
-                commit_msg = self.agent.generate_commit_message(f"Research synthesis on {args}")
-                self.kb.git_commit(commit_msg)
-
-                await message.channel.send(f"✅ Research complete.", file=discord.File(file_path))
-                logger.info(f"**RESEARCH**: {args} in {channel_name}", message.guild)
-
+                if not args:
+                    await message.channel.send("Usage: `!research [topic]`")
+                    return
+                await self.handle_research(message.channel, message.guild, args, message.id)
             elif cmd == "omni":
                 if not args:
                     await message.channel.send("Usage: `!omni [query]`")
                     return
-                await message.channel.send(f"🌐 Traversing entire knowledge base for: {args}...")
-                global_context = self.kb.get_global_context(args)
-                result = self.agent.run_command(
-                    f"Using the full knowledge base context across all channels, answer this query comprehensively with citations: {args}",
-                    context=global_context
-                )
-                filename = f"OMNI-{datetime.date.today()}-{message.id}.md"
-                file_path = os.path.join(channel_path, filename)
-                lineage = f"\n\n---\n**Lineage:**\n- Path: {file_path}\n- Discord: {message.jump_url}\n- URI: viking://{message.guild.name}/omni/{filename}"
-                self.kb.write_file(file_path, result + lineage)
-                commit_msg = self.agent.generate_commit_message(f"Omni query synthesis: {args}")
-                self.kb.git_commit(commit_msg)
-                await message.channel.send(f"✅ Omni search complete.", file=discord.File(file_path))
-                logger.info(f"**OMNI**: {args}", message.guild)
+                await self.handle_omni(message.channel, message.guild, args, message.id)
+            return # Command handled
+
 
         # --- 2. HANDLE KNOWLEDGE INGESTION (Links/Files) ---
         elif "http://" in message.content or "https://" in message.content:
