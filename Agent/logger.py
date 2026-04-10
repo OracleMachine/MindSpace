@@ -9,16 +9,16 @@ WARNING = logging.WARNING
 ERROR = logging.ERROR
 
 logging.basicConfig(
-    level=logging.DEBUG,
+    level=logging.INFO,
     format='%(asctime)s [%(levelname)s] %(message)s',
     datefmt='%Y-%m-%d %H:%M:%S'
 )
 
-# Suppress noisy library-level DEBUG logs
-for logger_name in ["asyncio", "httpx", "urllib3", "discord", "google.genai", "httpcore"]:
-    logging.getLogger(logger_name).setLevel(logging.INFO)
-
 _internal_logger = logging.getLogger("MindSpace")
+_internal_logger.setLevel(logging.DEBUG)
+
+# If you want to see detailed OpenViking semantic search logs, uncomment this:
+# logging.getLogger("openviking").setLevel(logging.DEBUG)
 
 class MindSpaceLogger:
     """Unified global logger that routes logs to Console (sync) and Discord (background)."""
