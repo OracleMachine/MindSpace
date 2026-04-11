@@ -10,7 +10,7 @@ ERROR = logging.ERROR
 
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s [%(levelname)s] %(message)s',
+    format='%(asctime)s [%(levelname)s] %(module)s:%(lineno)d - %(message)s',
     datefmt='%Y-%m-%d %H:%M:%S'
 )
 
@@ -43,12 +43,11 @@ class MindSpaceLogger:
     def _log(self, level, message, guild=None):
         """Main logging entry point (synchronous)."""
         level_name = logging.getLevelName(level)
-        
-        # 1. Immediate Console Log
-        if level == logging.DEBUG: _internal_logger.debug(message)
-        elif level == logging.INFO: _internal_logger.info(message)
-        elif level == logging.WARNING: _internal_logger.warning(message)
-        elif level == logging.ERROR: _internal_logger.error(message)
+
+        # 1. Immediate Console Log.
+        # stacklevel=3 skips: _internal_logger.X (1) -> _log (2) -> debug/info/... (3)
+        # so %(module)s and %(lineno)d resolve to the actual caller, not logger.py.
+        _internal_logger.log(level, message, stacklevel=3)
 
         # 2. Queue for Discord Log if bot is active and level is sufficient
         if self.bot and guild and level >= self.discord_level:
