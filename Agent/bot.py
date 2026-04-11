@@ -103,12 +103,17 @@ class MindSpaceBot(discord.Client):
         logger.info(f'Logged in as {self.user} (ID: {self.user.id})')
         logger.info('------')
 
+        logger.info("Startup: ensuring #system-log channel...")
         await self._ensure_system_log(guild)
+        logger.info("Startup: syncing KB folders → Discord channels...")
         await self._sync_kb_channels(guild)
 
         # Initial indexing (full sync on startup)
+        logger.info("Startup: running OpenViking rebuild_index (may re-index files on disk)...")
         self.kb.viking.rebuild_index()
+        logger.info("Startup: running PageIndex rebuild_index (uploads new PDFs, polls until ready)...")
         self.kb.pageindex.rebuild_index(self.kb.channels_path)
+        logger.info("Startup: all indexing complete — bot fully ready")
 
         for channel in guild.text_channels:
             if channel.name != "system-log":
@@ -331,7 +336,7 @@ OUTPUT FORMAT (markdown, no extra prose outside this structure):
         header = f"🔬 Researching: **{topic}**"
         last_edit = asyncio.get_event_loop().time()
         async for line in handle:
-            logger.info(f"CLI | {line}")
+            logger.debug(f"CLI | {line}")
             lines.append(line)
             now = asyncio.get_event_loop().time()
             if now - last_edit >= 2.0:
@@ -648,36 +653,40 @@ def _preflight_check():
     Verify all required dependencies are installed and API keys are valid.
     Uses lightweight checks to avoid redundant manager initialization.
     """
-    # 1. PageIndex: check install
+    logger.info("Preflight: checking PageIndex install...")
     try:
         from pageindex import PageIndexClient
     except ImportError:
         raise RuntimeError("PageIndex is not installed. Run: pip install pageindex")
 
-    # 2. OpenViking: check install
+    logger.info("Preflight: checking OpenViking install...")
     try:
         import openviking as ov
     except ImportError:
         raise RuntimeError("OpenViking is not installed. Run: pip install openviking")
 
-    # 3. GitPython: check install
+    logger.info("Preflight: checking GitPython install...")
     try:
         import git
     except ImportError:
         raise RuntimeError("GitPython is not installed. Run: pip install GitPython")
 
-    # 4. API Key Validation (Minimal live calls)
+    # API Key Validation (Minimal live calls)
     try:
+        logger.info("Preflight: validating PageIndex API key (list_documents)...")
         pi_client = PageIndexClient(api_key=config.PAGEINDEX_API_KEY)
         pi_client.list_documents(limit=1)
 
+        logger.info("Preflight: initializing OpenViking client...")
         os.environ.setdefault("OPENVIKING_CONFIG_FILE", config.OPENVIKING_CONF_PATH)
         ov_client = ov.SyncOpenViking(path=config.OPENVIKING_DATA_PATH)
         ov_client.initialize()
+        logger.info("Preflight: probing OpenViking with test query...")
         ov_client.find("preflight check", limit=1)
         ov_client.close()
     except Exception as e:
         raise RuntimeError(f"API key validation failed: {e}")
+    logger.info("Preflight: all checks passed")
 
 
 if __name__ == "__main__":

@@ -31,6 +31,7 @@ class GoogleGenAIBrain(LLMBrain):
 
     def run_command(self, instruction: str, context: str = None) -> str:
         full_prompt = f"System Context:\n{context}\n\nUser Message: {instruction}" if context else instruction
+        logger.debug(f"GoogleGenAI.run_command prompt ({len(full_prompt)} chars):\n{full_prompt}")
         try:
             response = self.client.models.generate_content(
                 model=self.model,
@@ -42,6 +43,12 @@ class GoogleGenAIBrain(LLMBrain):
 
     def chat(self, system_ctx: str, history: list, message: str, tools: list = None) -> str:
         """Multi-turn call: system context via system_instruction, history as prior turns."""
+        logger.debug(
+            f"GoogleGenAI.chat system_ctx ({len(system_ctx or '')} chars):\n{system_ctx}\n"
+            f"--- history ({len(history)} turns) ---\n"
+            + "\n".join(f"[{r}] {c}" for r, c in history)
+            + f"\n--- message ---\n{message}"
+        )
         contents = []
         for role, content in history:
             gemini_role = "model" if role == "assistant" else "user"
@@ -76,6 +83,7 @@ class LiteLLMBrain(LLMBrain):
         if context:
             messages.append({"role": "system", "content": context})
         messages.append({"role": "user", "content": instruction})
+        logger.debug(f"LiteLLM.run_command messages:\n{messages}")
         try:
             response = completion(model=self.model, messages=messages)
             return response.choices[0].message.content.strip()
@@ -84,6 +92,12 @@ class LiteLLMBrain(LLMBrain):
 
     def chat(self, system_ctx: str, history: list, message: str, tools: list = None) -> str:
         """Multi-turn call: system context as system message, history as prior turns."""
+        logger.debug(
+            f"LiteLLM.chat system_ctx ({len(system_ctx or '')} chars):\n{system_ctx}\n"
+            f"--- history ({len(history)} turns) ---\n"
+            + "\n".join(f"[{r}] {c}" for r, c in history)
+            + f"\n--- message ---\n{message}"
+        )
         messages = []
         if system_ctx:
             messages.append({"role": "system", "content": system_ctx})
@@ -139,6 +153,7 @@ class GeminiCLIBrain(LLMBrain):
 
     def run_command(self, instruction: str, context: str = None) -> str:
         prompt = self._build_prompt(instruction, context)
+        logger.debug(f"GeminiCLI.run_command prompt ({len(prompt)} chars):\n{prompt}")
         result = subprocess.run(
             self.build_args(),
             input=prompt,
@@ -163,6 +178,9 @@ class GeminiCLIBrain(LLMBrain):
                 ...   # inspect failure
         """
         args = self.build_args()
+        logger.debug(
+            f"GeminiCLI.stream args={args} cwd={cwd} prompt ({len(prompt)} chars):\n{prompt}"
+        )
         proc = await asyncio.create_subprocess_exec(
             *args,
             stdin=asyncio.subprocess.PIPE,

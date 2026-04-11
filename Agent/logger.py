@@ -14,8 +14,19 @@ logging.basicConfig(
     datefmt='%Y-%m-%d %H:%M:%S'
 )
 
+# MindSpace gets its own DEBUG-level handler so prompt dumps and other
+# verbose bot logs surface without turning on DEBUG for every third-party
+# library (discord, google-genai, httpx, etc.).
 _internal_logger = logging.getLogger("MindSpace")
 _internal_logger.setLevel(logging.DEBUG)
+_internal_logger.propagate = False
+_ms_handler = logging.StreamHandler()
+_ms_handler.setLevel(logging.DEBUG)
+_ms_handler.setFormatter(logging.Formatter(
+    '%(asctime)s [%(levelname)s] %(module)s:%(lineno)d - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S',
+))
+_internal_logger.addHandler(_ms_handler)
 
 # If you want to see detailed OpenViking semantic search logs, uncomment this:
 # logging.getLogger("openviking").setLevel(logging.DEBUG)

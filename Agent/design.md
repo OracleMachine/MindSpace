@@ -133,7 +133,7 @@ Keys are file paths relative to `Channels/`. Values track the file's mtime at th
 - **Cold start** (cache file missing or corrupted): `client.rm("viking://resources/", recursive=True)` wipes the store, then everything on disk is re-indexed from scratch. This is the self-healing path — also runs if the user manually deletes the cache to force a clean rebuild.
 - **Warm start** (cache present): walks `Channels/*/**/*.md`, compares mtimes to the cache, and only touches the delta — new files added, modified files re-added after `rm`, deleted files purged via `rm` and dropped from the cache. Logs a summary: `N new, M modified, K removed, U unchanged, F failed`.
 
-**Post-commit indexing:** After every `git_commit()`, `manager.py` calls `index_file()` on each staged file. Because `index_file()` is idempotent against the cache, this is safe and cheap — unchanged files short-circuit, modified files handle the rm+re-add internally.
+**Post-commit indexing:** After every `git_commit()`, `manager.py` calls `index_file()` on each staged file. Because `index_file()` is idempotent against the cache, this is safe and cheap — unchanged files short-circuit, modified files handle the rm+re-add internally. The loop also path-guards against anything outside `Channels/` (belt-and-suspenders — the bot should never stage such files in the first place, see §10.1).
 
 **Invariant:** cache file present ⇔ OpenViking store matches cache. Deleting the cache is always safe; the store will self-heal on next startup.
 
@@ -211,3 +211,11 @@ Either way, the event loop stays responsive throughout the multi-minute CLI run.
 - **Instant file delivery.** Every new `.md` file created is sent back to Discord as an attachment.
 - **File naming:** all output markdown files use lowercase `.md` extension with `TYPE-DATE-SUBJECT` format, where SUBJECT is a kebab-case slug derived from the topic/query/title (or extracted from the first H1 for consolidate/webpage). This keeps filenames human-scannable in `ls` and searchable by keyword.
 - **Preflight check on startup:** validates that PageIndex, OpenViking, and GitPython are installed and that API keys are functional before the Discord connection is established.
+
+### 10.1 Commit Scope — `Channels/` only
+
+The bot's `git_commit()` deliberately stages **only** paths under `Channels/` (`git add Channels`, not `git add -A`). Change detection (`changed_files` / `untracked`) is scoped to the same prefix, so the post-commit indexer never even sees anything outside.
+
+**Why:** `Thought/` also holds `openviking/` (regenerable vector store, churns on every run), `bot-home/` (isolated Gemini CLI config), and local bookkeeping caches (`.viking_index.json`, `.pageindex_index.json`). Letting the bot auto-stage those would pollute the KB history with library runtime noise — and worse, would feed OpenViking's own internal `.md` artifacts back into `index_file()`, producing nonsensical channel names like `..` and corrupting the store.
+
+**What this means for the user:** the repo can still track anything you want for manual inspection or archival — `git add -A` by hand is fine, and a full snapshot of `openviking/` state is useful for diffing or debugging. The bot simply refuses to do it for you. Bot commits stay content-only; manual commits can touch anything. The two histories interleave cleanly.

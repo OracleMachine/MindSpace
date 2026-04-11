@@ -16,10 +16,14 @@ class KnowledgeBaseManager:
         self.server_name = self._sanitize_name(server_name)
         self.root_path = config.BASE_STORAGE_PATH
         self.channels_path = config.CHANNELS_PATH
+        logger.info(f"KB: opening git repo at {self.root_path}")
         self._repo = self._ensure_repo_exists()
+        logger.info("KB: initializing VikingContextManager (OpenViking client)...")
         self.viking = VikingContextManager(self.channels_path)
+        logger.info("KB: initializing PageIndexManager (cloud client)...")
         self.pageindex = PageIndexManager()
         self._history_cache = {}  # channel_name → bounded history string
+        logger.info("KB: initialization complete")
 
     def _sanitize_name(self, name):
         """Standardize folder names for the filesystem."""
@@ -60,35 +64,54 @@ class KnowledgeBaseManager:
 
     def git_commit(self, message):
         """
-        Perform a Git commit and lazily rebuild indexes for changed files only.
-        Replaces slow subprocess calls with GitPython.
+        Commit changes under Channels/ only, then lazily re-index the touched
+        files. Deliberately scoped to Channels/ so the bot never stages
+        OpenViking internals, bot-home/, or other runtime state — while the
+        user remains free to manually `git add` anything else for inspection
+        or archival. The goal is a clean, content-only commit history for
+        the knowledge base.
         """
-        # Find untracked and modified files before committing
-        changed_files = [item.a_path for item in self._repo.index.diff(None)]
-        untracked = self._repo.untracked_files
+        channels_rel = os.path.relpath(self.channels_path, self.root_path)
+
+        # Find modified and untracked files before staging, scoped to Channels/.
+        changed_files = [
+            item.a_path for item in self._repo.index.diff(None)
+            if item.a_path.startswith(channels_rel + os.sep) or item.a_path == channels_rel
+        ]
+        untracked = [
+            p for p in self._repo.untracked_files
+            if p.startswith(channels_rel + os.sep) or p == channels_rel
+        ]
         to_index = set(changed_files + untracked)
 
-        # Stage and commit
-        self._repo.git.add(A=True)
+        # Stage ONLY Channels/ — leave everything else (openviking/, caches,
+        # anything the user may be curating manually) alone.
+        self._repo.git.add(channels_rel)
         try:
             self._repo.index.commit(message)
         except Exception as e:
             logger.warning(f"Git commit failed (likely no changes): {e}")
 
-        # Lazy Indexing: only re-index files that were actually modified/added
+        # Lazy Indexing: only re-index files that live under Channels/.
+        # Anything outside (openviking/ internal state, .gitignore, bot-home/,
+        # etc.) must not be fed back into the indexers — their path would
+        # resolve to a bogus channel name like ".." and corrupt the store.
+        channels_abs = os.path.abspath(self.channels_path)
         for file_rel_path in to_index:
-            abs_path = os.path.join(self.root_path, file_rel_path)
+            abs_path = os.path.abspath(os.path.join(self.root_path, file_rel_path))
             if not os.path.exists(abs_path):
                 continue
-            
+            if os.path.commonpath([abs_path, channels_abs]) != channels_abs:
+                continue  # not under Channels/ — skip
+
+            channel_name = os.path.relpath(abs_path, channels_abs).split(os.sep)[0]
+
             # Re-index .md in Viking
             if abs_path.endswith(".md"):
-                channel_name = os.path.relpath(abs_path, self.channels_path).split(os.sep)[0]
                 self.viking.index_file(abs_path, channel_name)
-            
+
             # Re-index .pdf in PageIndex
             elif abs_path.endswith(".pdf"):
-                channel_name = os.path.relpath(abs_path, self.channels_path).split(os.sep)[0]
                 try:
                     self.pageindex.index_document(abs_path, channel_name)
                 except Exception:

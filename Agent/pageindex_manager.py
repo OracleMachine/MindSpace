@@ -4,6 +4,7 @@ import time
 import glob as glob_module
 from pageindex import PageIndexClient
 import config
+from logger import logger
 
 
 _INDEX_FILE = os.path.join(config.BASE_STORAGE_PATH, ".pageindex_index.json")
@@ -124,15 +125,24 @@ class PageIndexManager:
         Called after git_commit to pick up newly committed PDFs.
         Skips files already in the index; ignores failures silently.
         """
-        for file_path in glob_module.glob(
+        logger.info(f"PageIndex: scanning {kb_root_path} for .pdf files...")
+        all_pdfs = glob_module.glob(
             os.path.join(kb_root_path, "**/*.pdf"), recursive=True
-        ):
-            if file_path not in self._index["documents"]:
-                channel_name = os.path.relpath(file_path, kb_root_path).split(os.sep)[0]
-                try:
-                    self.index_document(file_path, channel_name)
-                except Exception:
-                    pass
+        )
+        pending = [p for p in all_pdfs if p not in self._index["documents"]]
+        logger.info(
+            f"PageIndex: found {len(all_pdfs)} PDF(s) total, {len(pending)} pending upload, "
+            f"{len(all_pdfs) - len(pending)} already indexed"
+        )
+        for i, file_path in enumerate(pending, start=1):
+            channel_name = os.path.relpath(file_path, kb_root_path).split(os.sep)[0]
+            logger.info(f"PageIndex: [{i}/{len(pending)}] uploading {file_path} (channel={channel_name})")
+            try:
+                self.index_document(file_path, channel_name)
+                logger.info(f"PageIndex: [{i}/{len(pending)}] ready")
+            except Exception as e:
+                logger.warning(f"PageIndex: [{i}/{len(pending)}] failed: {e}")
+        logger.info("PageIndex: rebuild_index complete")
 
     # --- Preflight validation ---
 

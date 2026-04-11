@@ -25,10 +25,17 @@ class VikingContextManager:
         self.root_path = root_path
         self._cache_path = os.path.join(config.BASE_STORAGE_PATH, self._CACHE_FILENAME)
         self._cache, self._cache_was_present = self._load_cache()
+        logger.info(
+            f"Viking: cache {'loaded' if self._cache_was_present else 'MISSING (cold start)'} "
+            f"with {len(self._cache)} entries"
+        )
         self._ensured_channels: set[str] = set()  # channel URIs confirmed to exist
         os.environ.setdefault("OPENVIKING_CONFIG_FILE", config.OPENVIKING_CONF_PATH)
+        logger.info(f"Viking: constructing SyncOpenViking(path={config.OPENVIKING_DATA_PATH})...")
         self.client = ov.SyncOpenViking(path=config.OPENVIKING_DATA_PATH)
+        logger.info("Viking: calling client.initialize() (this may spin up the backend)...")
         self.client.initialize()
+        logger.info("Viking: client initialized")
 
     def _ensure_channel_dir(self, channel_name: str) -> str:
         """
