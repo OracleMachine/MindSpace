@@ -176,6 +176,11 @@ class GeminiCLIBrain(LLMBrain):
         proc.stdin.close()
         return CliStream(proc, self._ANSI_RE)
 
+    def chat(self, system_ctx: str, history: list, message: str, tools: list = None) -> str:
+        # tools ignored — Gemini CLI manages its own tool loop internally
+        prompt = self._build_prompt(message, system_ctx=system_ctx, history=history)
+        return self.run_command(prompt)
+
 
 class CliStream:
     """Async-iterable wrapper around a running Gemini CLI subprocess.
@@ -198,11 +203,6 @@ class CliStream:
                     yield line
         finally:
             self.returncode = await self._proc.wait()
-
-    def chat(self, system_ctx: str, history: list, message: str, tools: list = None) -> str:
-        # tools ignored — Gemini CLI manages its own tool loop internally
-        prompt = self._build_prompt(message, system_ctx=system_ctx, history=history)
-        return self.run_command(prompt)
 
 
 class MindSpaceAgent:
