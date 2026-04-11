@@ -102,9 +102,40 @@ On `on_ready`, the bot:
 | **Channel-scoped** | `get_channel_context(channel_name, query)` | All default operations | Current channel folder only |
 | **Global** | `get_global_context(query)` | `!omni` and `search_global_knowledge_base` tool | All channel folders in the server |
 
-**Indexing strategy:**
-- `rebuild_index()` is called **once at startup** to do a full re-index of all `.md` files.
-- After every `git_commit()`, only the files that were staged in that commit are lazily re-indexed (`index_file()`), avoiding a full rebuild on every write.
+**Indexing strategy — incremental, duplicate-free:**
+
+OpenViking stores the vectors, but does not tell the bot which on-disk files it has already seen. To avoid re-indexing unchanged files on every restart (and, worse, accumulating duplicate vectors), `viking.py` maintains its own bookkeeping cache.
+
+**The cache:** `BASE_STORAGE_PATH/.viking_index.json` (e.g. `Thought/.viking_index.json`) — a small JSON file owned by the bot, **not** by OpenViking. Structure:
+
+```json
+{
+  "<rel_path_under_Channels>": {"mtime": <float>, "uri": "viking://..."}
+}
+```
+
+Keys are file paths relative to `Channels/`. Values track the file's mtime at the time of indexing and the resource URI returned by `add_resource()`. Writes are atomic (`tmp + os.replace`) so a crash mid-write cannot corrupt it.
+
+| | Cache (bot) | OpenViking store |
+| :--- | :--- | :--- |
+| Location | `Thought/.viking_index.json` | `Thought/openviking/` |
+| Owner | `VikingContextManager` | OpenViking library |
+| Contents | `{file → mtime, uri}` bookkeeping | Vectors + SQLite DB |
+| Size | Kilobytes | Large (grows with KB) |
+
+**`index_file(path, channel)` — idempotent:**
+- Unchanged (`cached.mtime >= disk.mtime`) → no-op, returns True. Critical duplicate-prevention path.
+- Modified → `client.rm(cached.uri)` to delete the stale vector, then `add_resource()`, update cache entry.
+- New → `add_resource()`, write cache entry.
+- Cache persisted on every successful add.
+
+**`rebuild_index()` — sync, not rebuild:**
+- **Cold start** (cache file missing or corrupted): `client.rm("viking://resources/", recursive=True)` wipes the store, then everything on disk is re-indexed from scratch. This is the self-healing path — also runs if the user manually deletes the cache to force a clean rebuild.
+- **Warm start** (cache present): walks `Channels/*/**/*.md`, compares mtimes to the cache, and only touches the delta — new files added, modified files re-added after `rm`, deleted files purged via `rm` and dropped from the cache. Logs a summary: `N new, M modified, K removed, U unchanged, F failed`.
+
+**Post-commit indexing:** After every `git_commit()`, `manager.py` calls `index_file()` on each staged file. Because `index_file()` is idempotent against the cache, this is safe and cheap — unchanged files short-circuit, modified files handle the rm+re-add internally.
+
+**Invariant:** cache file present ⇔ OpenViking store matches cache. Deleting the cache is always safe; the store will self-heal on next startup.
 
 ---
 
