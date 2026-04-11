@@ -24,6 +24,19 @@ def _extract_title(markdown: str) -> str | None:
         if line.startswith("# "):
             return line[2:].strip()
     return None
+
+
+def _strip_cli_preamble(lines: list[str], heading_prefix: str) -> str:
+    """Slice CLI output from the first line starting with `heading_prefix`.
+
+    The Gemini CLI interleaves retry/backoff noise with the final report;
+    this drops everything before the expected H1 so only the report is kept.
+    Falls back to the full joined output if the heading is never seen.
+    """
+    for i, line in enumerate(lines):
+        if line.lstrip().startswith(heading_prefix):
+            return "\n".join(lines[i:]).strip()
+    return "\n".join(lines).strip()
 from agent import MindSpaceAgent
 from tools import MindSpaceTools
 from manager import KnowledgeBaseManager
@@ -185,9 +198,10 @@ WHEN DONE, output ONLY this markdown report (no other prose):
             prompt=prompt,
             cwd=channel_path,
         )
-        report = await self._render_stream_to_channel(
+        raw = await self._render_stream_to_channel(
             channel, header="🔄 Gemini CLI organizing...", handle=handle,
         )
+        report = _strip_cli_preamble(raw.splitlines(), "## Organize Report")
 
         commit_msg = await asyncio.to_thread(
             self.agent.generate_commit_message,
@@ -310,10 +324,22 @@ OUTPUT FORMAT (markdown, no extra prose outside this structure):
             prompt=prompt,
             cwd=channel_path,
         )
+        # Stream CLI output to the deferred interaction's "thinking..." message,
+        # editing it every ~2s with the latest tail so the user sees progress
+        # without any follow-up spam. Console still gets every line.
         lines: list[str] = []
+        header = f"🔬 Researching: **{topic}**"
+        last_edit = asyncio.get_event_loop().time()
         async for line in handle:
             logger.info(f"CLI | {line}")
             lines.append(line)
+            now = asyncio.get_event_loop().time()
+            if now - last_edit >= 2.0:
+                tail = "\n".join(lines[-15:])
+                if len(tail) > 1700:
+                    tail = "..." + tail[-1697:]
+                await status(f"{header}\n```\n{tail}\n```")
+                last_edit = now
 
         logger.info(f"RESEARCH: CLI exited — returncode={handle.returncode}, lines={len(lines)}")
 
@@ -323,7 +349,7 @@ OUTPUT FORMAT (markdown, no extra prose outside this structure):
             await status(f"❌ Gemini CLI exited {handle.returncode}. Last lines:\n```\n{tail[:1500]}\n```")
             return
 
-        report = "\n".join(lines).strip()
+        report = _strip_cli_preamble(lines, "# Research:")
         if not report:
             logger.error("RESEARCH: CLI produced empty output")
             await status("⚠️ Research produced no output.")
@@ -403,9 +429,10 @@ OUTPUT FORMAT (markdown):
             prompt=prompt,
             cwd=config.CHANNELS_PATH,
         )
-        report = await self._render_stream_to_channel(
+        raw = await self._render_stream_to_channel(
             channel, header=f"🌐 Gemini CLI synthesizing: {query}...", handle=handle,
         )
+        report = _strip_cli_preamble(raw.splitlines(), "# Omni:")
 
         if not report.strip():
             await channel.send("⚠️ Omni synthesis produced no output.")
