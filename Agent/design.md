@@ -49,7 +49,7 @@ The system uses **VikingContextManager** (wrapping OpenViking) for context navig
 | :--- | :--- |
 | `bot.py` | Discord event loop (`on_message`), command routing (prefix `!` and slash `/`), startup sync. Single `KnowledgeBaseManager` instance (`self.kb`) initialized in `on_ready`. `on_guild_join` enforces the single-server constraint by leaving immediately if `self.kb` is already set. |
 | `agent.py` | LLM abstraction. `GoogleGenAIBrain` / `LiteLLMBrain` for dialogue (chat, URL/file analysis, commit messages). `GeminiCLIBrain` for commands — exposes `stream(prompt, cwd)` returning a `CliStream` async-iterable handle; env (`GEMINI_CLI_HOME`) and args (`-y`, `-m`) are always injected. |
-| `manager.py` | Filesystem writes, Git commits with lazy re-indexing, per-channel conversation history, stream reads |
+| `manager.py` | Filesystem writes, Git commits, orchestrated `save_state` (commit + indexing), per-channel conversation history, stream reads |
 | `tools.py` | `MindSpaceTools`: closure-bound tool functions exposed to the LLM during passive dialogue (list files, search channel KB, search global KB) |
 | `viking.py` | `VikingContextManager`: OpenViking wrapper; channel-scoped and global semantic search modes |
 | `pageindex_manager.py` | `PageIndexManager`: PageIndex cloud API wrapper; PDF upload, async processing, channel-scoped deep Q&A |
@@ -133,7 +133,14 @@ Keys are file paths relative to `Channels/`. Values track the file's mtime at th
 - **Cold start** (cache file missing or corrupted): `client.rm("viking://resources/", recursive=True)` wipes the store, then everything on disk is re-indexed from scratch. This is the self-healing path — also runs if the user manually deletes the cache to force a clean rebuild.
 - **Warm start** (cache present): walks `Channels/*/**/*.md`, compares mtimes to the cache, and only touches the delta — new files added, modified files re-added after `rm`, deleted files purged via `rm` and dropped from the cache. Logs a summary: `N new, M modified, K removed, U unchanged, F failed`.
 
-**Post-commit indexing:** After every `git_commit()`, `manager.py` calls `index_file()` on each staged file. Because `index_file()` is idempotent against the cache, this is safe and cheap — unchanged files short-circuit, modified files handle the rm+re-add internally. The loop also path-guards against anything outside `Channels/` (belt-and-suspenders — the bot should never stage such files in the first place, see §10.1).
+**Orchestrated Persistence (`save_state`):**
+The `KnowledgeBaseManager` decouples the source-of-truth (Git) from derived semantic indexes (Vector DB). 
+- **`git_commit(message)`**: Performs a surgical Git commit of the `Channels/` directory.
+- **`index_files(paths)`**: Incremental indexing of specific changed files in both OpenViking and PageIndex.
+- **`save_state(message)`**: The primary orchestrator. It finds all modified/untracked files in `Channels/`, performs a `git_commit`, and then triggers `index_files` on the delta. This ensures the repo and the DB stay in sync for all major events (file drops, active commands, research).
+
+**Lazy Thought Indexing:**
+During passive dialogue, extracted `THOUGHT:` blocks are appended to `stream_of_conscious.md` on disk. To avoid excessive Git noise and I/O overhead, these updates do **not** trigger an immediate commit or re-index. Instead, they are lazily picked up and indexed during the next naturally occurring `save_state` (e.g., when the user eventually drops a file or runs an active command).
 
 **Invariant:** cache file present ⇔ OpenViking store matches cache. Deleting the cache is always safe; the store will self-heal on next startup.
 

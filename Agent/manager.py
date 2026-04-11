@@ -64,40 +64,21 @@ class KnowledgeBaseManager:
 
     def git_commit(self, message):
         """
-        Commit changes under Channels/ only, then lazily re-index the touched
-        files. Deliberately scoped to Channels/ so the bot never stages
-        OpenViking internals, bot-home/, or other runtime state — while the
-        user remains free to manually `git add` anything else for inspection
-        or archival. The goal is a clean, content-only commit history for
-        the knowledge base.
+        Commit changes under Channels/ only.
         """
         channels_rel = os.path.relpath(self.channels_path, self.root_path)
 
-        # Find modified and untracked files before staging, scoped to Channels/.
-        changed_files = [
-            item.a_path for item in self._repo.index.diff(None)
-            if item.a_path.startswith(channels_rel + os.sep) or item.a_path == channels_rel
-        ]
-        untracked = [
-            p for p in self._repo.untracked_files
-            if p.startswith(channels_rel + os.sep) or p == channels_rel
-        ]
-        to_index = set(changed_files + untracked)
-
-        # Stage ONLY Channels/ — leave everything else (openviking/, caches,
-        # anything the user may be curating manually) alone.
+        # Stage ONLY Channels/
         self._repo.git.add(channels_rel)
         try:
             self._repo.index.commit(message)
         except Exception as e:
             logger.warning(f"Git commit failed (likely no changes): {e}")
 
-        # Lazy Indexing: only re-index files that live under Channels/.
-        # Anything outside (openviking/ internal state, .gitignore, bot-home/,
-        # etc.) must not be fed back into the indexers — their path would
-        # resolve to a bogus channel name like ".." and corrupt the store.
+    def index_files(self, file_rel_paths):
+        """Index specific files in OpenViking and PageIndex."""
         channels_abs = os.path.abspath(self.channels_path)
-        for file_rel_path in to_index:
+        for file_rel_path in file_rel_paths:
             abs_path = os.path.abspath(os.path.join(self.root_path, file_rel_path))
             if not os.path.exists(abs_path):
                 continue
@@ -116,6 +97,27 @@ class KnowledgeBaseManager:
                     self.pageindex.index_document(abs_path, channel_name)
                 except Exception:
                     pass
+
+    def save_state(self, message):
+        """
+        Orchestrate persistence: Commit changes to Git, then lazily re-index
+        the touched files in OpenViking and PageIndex.
+        """
+        channels_rel = os.path.relpath(self.channels_path, self.root_path)
+
+        # Find modified and untracked files before staging, scoped to Channels/.
+        changed_files = [
+            item.a_path for item in self._repo.index.diff(None)
+            if item.a_path.startswith(channels_rel + os.sep) or item.a_path == channels_rel
+        ]
+        untracked = [
+            p for p in self._repo.untracked_files
+            if p.startswith(channels_rel + os.sep) or p == channels_rel
+        ]
+        to_index = set(changed_files + untracked)
+
+        self.git_commit(message)
+        self.index_files(to_index)
 
     def get_channel_context(self, channel_name: str, query: str = "") -> str:
         """Return Viking L1 context string for a single channel."""

@@ -196,7 +196,7 @@ WHEN DONE, output ONLY this markdown report (no other prose):
             self.agent.generate_commit_message,
             f"Organized #{channel_name} channel folder via Gemini CLI"
         )
-        await asyncio.to_thread(self.kb.git_commit, commit_msg)
+        await asyncio.to_thread(self.kb.save_state, commit_msg)
         await self.send_message_safe(channel, report or "No report generated.")
         logger.info(f"**ORGANIZE**: {channel_name} - {commit_msg}", guild)
 
@@ -224,7 +224,7 @@ WHEN DONE, output ONLY this markdown report (no other prose):
             self.agent.generate_commit_message,
             f"Consolidated thoughts in {channel_name} into {filename}"
         )
-        await asyncio.to_thread(self.kb.git_commit, commit_msg)
+        await asyncio.to_thread(self.kb.save_state, commit_msg)
 
         await channel.send(f"✅ Consolidation complete. Saved to: {file_path}", file=discord.File(file_path))
         logger.info(f"**CONSOLIDATE**: {channel_name} -> `{filename}`", guild)
@@ -345,7 +345,7 @@ OUTPUT FORMAT (markdown, no extra prose outside this structure):
             self.agent.generate_commit_message,
             f"Research synthesis on {topic}"
         )
-        await asyncio.to_thread(self.kb.git_commit, commit_msg)
+        await asyncio.to_thread(self.kb.save_state, commit_msg)
 
         # Final update: edit the "thinking..." message to show completion AND attach
         # the research file in the same message — no follow-up created.
@@ -425,7 +425,7 @@ OUTPUT FORMAT (markdown):
             self.agent.generate_commit_message,
             f"Omni query synthesis: {query}"
         )
-        await asyncio.to_thread(self.kb.git_commit, commit_msg)
+        await asyncio.to_thread(self.kb.save_state, commit_msg)
         await channel.send(f"✅ Omni search complete.", file=discord.File(file_path))
         logger.info(f"**OMNI**: {query}", guild)
 
@@ -573,7 +573,7 @@ OUTPUT FORMAT (markdown):
                 self.agent.generate_commit_message,
                 f"Ingested webpage snapshot: {filename}"
             )
-            await asyncio.to_thread(self.kb.git_commit, commit_msg)
+            await asyncio.to_thread(self.kb.save_state, commit_msg)
             await self.send_message_safe(message.channel, f"✅ Link ingested and snapshotted: {file_path}")
             logger.info(f"**INGEST (URL)**: {message.content[:50]}... -> `{filename}`", message.guild)
 
@@ -593,7 +593,8 @@ OUTPUT FORMAT (markdown):
                     self.agent.generate_commit_message,
                     f"Ingested file: {attachment.filename}"
                 )
-                await asyncio.to_thread(self.kb.git_commit, commit_msg)
+                await asyncio.to_thread(self.kb.save_state, commit_msg)
+                
                 await self.send_message_safe(message.channel, f"✅ File ingested: {attachment.filename}. Analysis: {analysis}")
                 logger.info(f"**INGEST (FILE)**: `{attachment.filename}` in {channel_name}", message.guild)
 
