@@ -634,6 +634,14 @@ OUTPUT FORMAT (markdown):
         else:
             available_tools = self.tools.get_tools(channel_name)
 
+            status_msg = await message.channel.send("🧠 **Thinking...**")
+
+            async def on_progress(text: str):
+                try:
+                    await status_msg.edit(content=f"🧠 **Thinking...**\n{text}")
+                except Exception:
+                    pass
+
             reply, thought = await self.agent.engage_dialogue(
                 message.content,
                 channel_name,
@@ -641,7 +649,13 @@ OUTPUT FORMAT (markdown):
                 stream_content=self.kb.get_stream_content(channel_name),
                 tools=available_tools,
                 mcp_sessions=self.mcp_pool.sessions if self.mcp_pool else None,
+                on_progress=on_progress
             )
+
+            try:
+                await status_msg.delete()
+            except Exception:
+                pass
 
             self.kb.append_history(channel_name, message.author.display_name, message.content)
             self.kb.append_history(channel_name, "assistant", reply)

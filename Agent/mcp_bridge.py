@@ -49,14 +49,12 @@ class MCPSessionPool:
     """Live pool of `mcp.ClientSession`s, opened over streamable HTTP.
 
     Lifetime is tied to the bot: `connect()` in setup_hook, `close()` in
-    the bot's `close()`. `sessions` is a plain list of ClientSession
-    objects that can be appended into `types.GenerateContentConfig(tools=...)`
-    — the google-genai SDK handles MCP tool discovery and dispatch natively.
+    the bot's `close()`. `sessions` is a dict {name: ClientSession}.
     """
 
     def __init__(self, servers: dict):
         self.servers = servers or {}
-        self.sessions: list = []
+        self.sessions: dict = {}
         self._exit_stack: Optional[AsyncExitStack] = None
 
     async def connect(self) -> None:
@@ -88,7 +86,7 @@ class MCPSessionPool:
                     ClientSession(read_stream, write_stream)
                 )
                 await session.initialize()
-                self.sessions.append(session)
+                self.sessions[name] = session
                 logger.info(f"MCP: connected → {name} ({url})")
             except (Exception, asyncio.CancelledError) as e:
                 # CancelledError propagates from anyio cancel scopes when the
@@ -104,4 +102,4 @@ class MCPSessionPool:
             except Exception as e:
                 logger.warning(f"MCP: error closing session pool: {e}")
         self._exit_stack = None
-        self.sessions = []
+        self.sessions = {}
