@@ -720,6 +720,7 @@ def _preflight_check():
 
 
 if __name__ == "__main__":
+    logger.info("========== Launching..... ==========")
     required_vars = {
         "DISCORD_TOKEN": config.DISCORD_TOKEN,
         "GEMINI_API_KEY": config.GEMINI_API_KEY,
