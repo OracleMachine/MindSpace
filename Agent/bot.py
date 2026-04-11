@@ -5,6 +5,7 @@ import datetime
 import config
 import asyncio
 import functools
+import git
 from discord import app_commands
 
 
@@ -119,8 +120,13 @@ class MindSpaceBot(discord.Client):
         self.kb.viking.rebuild_index()
         logger.info("Startup: running PageIndex rebuild_index (uploads new PDFs, polls until ready)...")
         self.kb.pageindex.rebuild_index(self.kb.channels_path)
-        git_info = self.kb._repo.git.describe("--tags", "--dirty", "--always")
-        logger.info(f"Startup: all indexing complete — bot fully ready (Git: {git_info})")
+        
+        # Get Git info for both repos
+        agent_repo = git.Repo(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        agent_git = agent_repo.git.describe("--tags", "--dirty", "--always")
+        thought_git = self.kb._repo.git.describe("--tags", "--dirty", "--always")
+
+        logger.info(f"Startup: all indexing complete — bot fully ready (Agent: {agent_git} Thought: {thought_git})")
 
         for channel in guild.text_channels:
             if channel.name != "system-log":
@@ -172,7 +178,8 @@ class MindSpaceBot(discord.Client):
             await channel.send("✅ No untracked files in this channel to organize.")
             return
 
-        prompt = f"""You are organizing the MindSpace knowledge base channel folder for #{channel_name}.
+        prompt = f"""
+You are organizing the MindSpace knowledge base channel folder for #{channel_name}.
 Your current working directory IS this channel folder — all paths are relative to it.
 
 UNTRACKED FILES TO ORGANIZE:
@@ -384,7 +391,8 @@ OUTPUT FORMAT (markdown, no extra prose outside this structure):
 
         global_context = await asyncio.to_thread(self.kb.get_global_context, query)
 
-        prompt = f"""You are performing a cross-channel synthesis across the ENTIRE MindSpace knowledge base.
+        prompt = f"""
+You are performing a cross-channel synthesis across the ENTIRE MindSpace knowledge base.
 
 QUERY: "{query}"
 
