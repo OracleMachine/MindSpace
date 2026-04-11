@@ -40,6 +40,10 @@ class MindSpaceBot(discord.Client):
         self.tools = None
         self.mcp_pool = None  # initialized in setup_hook; drains into dialogue brain tools
         self.tree = app_commands.CommandTree(self)
+        
+        # Discord Log Queue (Async sink for the sync logger)
+        self._log_queue = asyncio.Queue()
+        self._log_publisher_task = None
 
     async def setup_hook(self):
         """Initialize the agent, register slash commands, and start background tasks.
@@ -49,7 +53,9 @@ class MindSpaceBot(discord.Client):
         mcp_bridge.sync_cli_settings()
         self.mcp_pool = mcp_bridge.MCPSessionPool(config.MCP_SERVERS)
         await self.mcp_pool.connect()
-        self.log_task = self.loop.create_task(logger.process_log_queue())
+
+        # Start the log publisher immediately
+        self._log_publisher_task = self.loop.create_task(self._log_publisher())
 
         @self.tree.command(name="organize", description="Re-sync and organize the current channel's knowledge base folder.")
         async def cmd_organize(interaction: discord.Interaction):
@@ -81,10 +87,11 @@ class MindSpaceBot(discord.Client):
         # Initialize the SINGLE KnowledgeBaseManager for the first guild
         guild = self.guilds[0]
         
-        # Inject logging callback
-        async def discord_log_callback(msg: str):
-            await self.send_system_log(guild, msg)
-        logger.set_callback(discord_log_callback)
+        # Inject synchronous logging callback.
+        # Uses call_soon_threadsafe so logger.info() works from any thread.
+        def bridge_to_discord(msg: str):
+            self.loop.call_soon_threadsafe(self._log_queue.put_nowait, msg)
+        logger.set_callback(bridge_to_discord)
 
         if self.kb is None:
             self.kb = KnowledgeBaseManager(guild.name)
@@ -202,8 +209,7 @@ WHEN DONE, output ONLY this markdown report (no other prose):
         )
         report = handle.get_full_response()
 
-        commit_msg = await asyncio.to_thread(
-            self.agent.generate_commit_message,
+        commit_msg = await self.agent.generate_commit_message(
             f"Organized #{channel_name} channel folder via Gemini CLI"
         )
         await asyncio.to_thread(self.kb.save_state, commit_msg)
@@ -220,8 +226,7 @@ WHEN DONE, output ONLY this markdown report (no other prose):
         with open(stream_file, "r") as f:
             content = f.read()
 
-        synthesis = await asyncio.to_thread(
-            self.agent.run_command,
+        synthesis = await self.agent.run_command(
             f"Synthesize these thoughts into a structured permanent article:\n\n{content}"
         )
         subject = _slugify_subject(_extract_title(synthesis) or channel_name)
@@ -230,8 +235,7 @@ WHEN DONE, output ONLY this markdown report (no other prose):
         self.kb.write_file(file_path, synthesis)
         self.kb.write_file(stream_file, f"# Stream of Consciousness: {channel_name}\n\n")
 
-        commit_msg = await asyncio.to_thread(
-            self.agent.generate_commit_message,
+        commit_msg = await self.agent.generate_commit_message(
             f"Consolidated thoughts in {channel_name} into {filename}"
         )
         await asyncio.to_thread(self.kb.save_state, commit_msg)
@@ -351,8 +355,7 @@ OUTPUT FORMAT (markdown, no extra prose outside this structure):
         self.kb.write_file(file_path, report + lineage)
         logger.info(f"RESEARCH: wrote report to {file_path}")
 
-        commit_msg = await asyncio.to_thread(
-            self.agent.generate_commit_message,
+        commit_msg = await self.agent.generate_commit_message(
             f"Research synthesis on {topic}"
         )
         await asyncio.to_thread(self.kb.save_state, commit_msg)
