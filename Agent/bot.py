@@ -119,7 +119,8 @@ class MindSpaceBot(discord.Client):
         self.kb.viking.rebuild_index()
         logger.info("Startup: running PageIndex rebuild_index (uploads new PDFs, polls until ready)...")
         self.kb.pageindex.rebuild_index(self.kb.channels_path)
-        logger.info("Startup: all indexing complete — bot fully ready")
+        git_info = self.kb._repo.git.describe("--tags", "--dirty", "--always")
+        logger.info(f"Startup: all indexing complete — bot fully ready (Git: {git_info})")
 
         for channel in guild.text_channels:
             if channel.name != "system-log":
