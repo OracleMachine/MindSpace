@@ -1,6 +1,5 @@
 import discord
 import os
-import re
 import datetime
 import config
 import asyncio
@@ -41,7 +40,7 @@ class MindSpaceBot(discord.Client):
         @app_commands.describe(topic="The specific topic to research")
         async def cmd_research(interaction: discord.Interaction, topic: str):
             await interaction.response.defer(thinking=True)
-            await self.handle_research(interaction.channel, interaction.guild, topic, interaction.id)
+            await self.handle_research(interaction.channel, interaction.guild, topic, interaction=interaction)
 
         @self.tree.command(name="omni", description="Cross-KB synthesis across all channels.")
         @app_commands.describe(query="The broad query to search across the entire knowledge base")
@@ -85,38 +84,20 @@ class MindSpaceBot(discord.Client):
 
     # --- CORE COMMAND LOGIC (Agnostic to Trigger) ---
 
-    async def _stream_cli_to_channel(self, channel, args: list, cwd: str, header: str,
-                                      stdin: str = None) -> str:
+    async def _render_stream_to_channel(self, channel, header: str, handle) -> str:
+        """Render a CLI stream handle to a single live-updating Discord message.
+
+        `handle` is any async-iterable that yields already-cleaned text lines
+        (e.g. `agent.CliStream`). This method is pure UI — it knows nothing
+        about subprocesses, env, or the CLI itself. Returns the full joined
+        output for the caller to post-process / save.
         """
-        Execute a CLI command, streaming stdout to a single live-updating Discord message.
-        - stdin: prompt text passed via stdin (avoids OS arg length limits).
-        - Edits the same message every 2s with latest accumulated output (ANSI stripped).
-        - When done, replaces message content with '✅ Task complete.'
-        - Returns the full raw output string for the caller to send as a follow-up.
-        """
-        _ansi = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
         status_msg = await channel.send(f"{header}\n```\n(initializing...)\n```")
-
-        proc = await asyncio.create_subprocess_exec(
-            *args,
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-            cwd=cwd
-        )
-        if stdin:
-            proc.stdin.write(stdin.encode())
-            proc.stdin.close()
-
         all_lines: list[str] = []
         last_edit = asyncio.get_event_loop().time()
 
-        async for raw in proc.stdout:
-            line = _ansi.sub('', raw.decode().rstrip())
-            if not line:
-                continue
+        async for line in handle:
             all_lines.append(line)
-
             now = asyncio.get_event_loop().time()
             if now - last_edit >= 2.0:
                 content = "\n".join(all_lines)
@@ -128,7 +109,6 @@ class MindSpaceBot(discord.Client):
                     pass
                 last_edit = now
 
-        await proc.wait()
         try:
             await status_msg.edit(content="✅ Task complete.")
         except discord.HTTPException:
@@ -182,9 +162,12 @@ WHEN DONE, output ONLY this markdown report (no other prose):
 **Skipped:**
 - `<file>`: <reason>
 """
-        args = self.agent.cli_brain.build_args()
-        report = await self._stream_cli_to_channel(
-            channel, args, cwd=channel_path, header="🔄 Gemini CLI organizing...", stdin=prompt
+        handle = await self.agent.cli_brain.stream(
+            prompt=prompt,
+            cwd=channel_path,
+        )
+        report = await self._render_stream_to_channel(
+            channel, header="🔄 Gemini CLI organizing...", handle=handle,
         )
 
         commit_msg = await asyncio.to_thread(
@@ -224,32 +207,117 @@ WHEN DONE, output ONLY this markdown report (no other prose):
         await channel.send(f"✅ Consolidation complete. Saved to: {file_path}", file=discord.File(file_path))
         logger.info(f"**CONSOLIDATE**: {channel_name} -> `{filename}`", guild)
 
-    async def handle_research(self, channel, guild, topic, interaction_id=None):
-        """Deep-dive on topic using current channel KB context."""
-        await channel.send(f"🔬 Synthesizing research on: {topic}...")
+    async def handle_research(self, channel, guild, topic, interaction: discord.Interaction = None):
+        """
+        Deep-dive on topic via Gemini CLI (web search + KB context).
+
+        If triggered via slash command (interaction provided), all status
+        updates edit the deferred "thinking..." message in place — no
+        follow-ups are sent. Text-command fallback uses channel.send.
+
+        Streams CLI output via agent.cli_brain.stream() — each line is
+        logged to console as it arrives and the event loop stays responsive.
+        """
+        # Status updater — edits the deferred interaction response when present,
+        # otherwise sends a fresh channel message. Single source for all progress
+        # communication so we never spawn extra messages.
+        async def status(content: str):
+            if interaction is not None:
+                try:
+                    await interaction.edit_original_response(content=content)
+                    return
+                except discord.HTTPException as e:
+                    logger.warning(f"RESEARCH: failed to edit interaction response: {e}")
+            await channel.send(content)
+
+        logger.info(f"RESEARCH: starting — topic={topic!r}")
+        await status(f"🔬 Gathering KB context for: {topic}...")
         channel_name = channel.name
         channel_path = self.kb.get_channel_path(channel_name)
+        logger.debug(f"RESEARCH: channel_path={channel_path}")
 
         viking_context = await asyncio.to_thread(self.kb.get_channel_context, channel_name, topic)
         deep_context = await asyncio.to_thread(self.kb.get_deep_context, channel_name, topic)
+        logger.debug(
+            f"RESEARCH: viking_context={len(viking_context or '')} chars, "
+            f"deep_context={len(deep_context or '')} chars"
+        )
+
         combined = ""
         if viking_context:
             combined += f"--- Semantic Overview (Viking) ---\n{viking_context}\n\n"
         if deep_context:
             combined += f"--- Deep Document Analysis (PageIndex) ---\n{deep_context}\n\n"
 
-        research_res = await asyncio.to_thread(
-            self.agent.run_command,
-            f"Perform deep research on {topic} using the provided KB context, citing specific sources.",
-            combined or None
-        )
+        prompt = f"""You are performing deep research on the topic: "{topic}"
 
-        suffix = interaction_id or int(datetime.datetime.now().timestamp())
+You have TWO sources of information:
+1. The local knowledge base context below (extracted from channel #{channel_name}).
+2. The web — use your search tool freely to find recent/authoritative sources.
+
+LOCAL KB CONTEXT:
+{combined or "(none — the KB had no relevant matches)"}
+
+TASK:
+- Synthesize a thorough research report on the topic.
+- Cross-reference local KB findings with fresh web sources.
+- Cite every non-trivial claim: inline `[source: <url or KB path>]`.
+- If KB context conflicts with web sources, flag the discrepancy explicitly.
+
+OUTPUT FORMAT (markdown, no extra prose outside this structure):
+# Research: {topic}
+
+## Executive Summary
+<3-5 sentence summary>
+
+## Key Findings
+- <finding 1> [source: ...]
+- <finding 2> [source: ...]
+
+## Detailed Analysis
+<multi-paragraph analysis with inline citations>
+
+## Conflicts & Open Questions
+<any contradictions between KB and web, or unresolved questions>
+
+## Sources
+- <url or KB path>: <one-line description>
+"""
+        logger.info(f"RESEARCH: invoking Gemini CLI — cwd={channel_path}, "
+                    f"prompt_len={len(prompt)}")
+        await status(f"🔬 Running Gemini CLI on: {topic}\n(watch console for live progress)")
+
+        handle = await self.agent.cli_brain.stream(
+            prompt=prompt,
+            cwd=channel_path,
+        )
+        lines: list[str] = []
+        async for line in handle:
+            logger.info(f"CLI | {line}")
+            lines.append(line)
+
+        logger.info(f"RESEARCH: CLI exited — returncode={handle.returncode}, lines={len(lines)}")
+
+        if handle.returncode != 0:
+            logger.error(f"RESEARCH: CLI failed with non-zero exit {handle.returncode}")
+            tail = "\n".join(lines[-20:])
+            await status(f"❌ Gemini CLI exited {handle.returncode}. Last lines:\n```\n{tail[:1500]}\n```")
+            return
+
+        report = "\n".join(lines).strip()
+        if not report:
+            logger.error("RESEARCH: CLI produced empty output")
+            await status("⚠️ Research produced no output.")
+            return
+
+        logger.debug(f"RESEARCH: report preview:\n{report[:500]}...")
+
+        suffix = (interaction.id if interaction else int(datetime.datetime.now().timestamp()))
         filename = f"RESEARCH-{datetime.date.today()}-{suffix}.md"
         file_path = os.path.join(channel_path, filename)
-
         lineage = f"\n\n---\n**Lineage:**\n- Path: {file_path}\n- URI: viking://{guild.name}/{channel_name}/{filename}"
-        self.kb.write_file(file_path, research_res + lineage)
+        self.kb.write_file(file_path, report + lineage)
+        logger.info(f"RESEARCH: wrote report to {file_path}")
 
         commit_msg = await asyncio.to_thread(
             self.agent.generate_commit_message,
@@ -257,26 +325,78 @@ WHEN DONE, output ONLY this markdown report (no other prose):
         )
         await asyncio.to_thread(self.kb.git_commit, commit_msg)
 
-        await channel.send(f"✅ Research complete.", file=discord.File(file_path))
-        logger.info(f"**RESEARCH**: {topic} in {channel_name}", guild)
+        # Final update: edit the "thinking..." message to show completion AND attach
+        # the research file in the same message — no follow-up created.
+        if interaction is not None:
+            try:
+                await interaction.edit_original_response(
+                    content=f"✅ Research complete: **{topic}**",
+                    attachments=[discord.File(file_path)],
+                )
+            except discord.HTTPException as e:
+                logger.warning(f"RESEARCH: failed to attach file to interaction: {e}")
+                await channel.send(f"✅ Research complete.", file=discord.File(file_path))
+        else:
+            await channel.send(f"✅ Research complete.", file=discord.File(file_path))
+        logger.info(f"RESEARCH: completed — topic={topic!r} channel=#{channel_name}", guild)
 
     async def handle_omni(self, channel, guild, query, interaction_id=None):
-        """Cross-KB synthesis across all channel folders."""
-        await channel.send(f"🌐 Traversing entire knowledge base for: {query}...")
+        """Cross-KB synthesis across all channels via Gemini CLI with live streaming."""
+        await channel.send(f"🌐 Gathering global KB context for: {query}...")
         channel_name = channel.name
         channel_path = self.kb.get_channel_path(channel_name)
 
         global_context = await asyncio.to_thread(self.kb.get_global_context, query)
-        result = await asyncio.to_thread(
-            self.agent.run_command,
-            f"Using the full knowledge base context across all channels, answer this query comprehensively with citations: {query}",
-            global_context
+
+        prompt = f"""You are performing a cross-channel synthesis across the ENTIRE MindSpace knowledge base.
+
+QUERY: "{query}"
+
+GLOBAL KB CONTEXT (semantic search across all channels):
+{global_context or "(no KB matches — rely on web search)"}
+
+TASK:
+- Answer the query comprehensively, drawing from ALL relevant channels.
+- Use web search to supplement gaps or verify recency.
+- Cite every claim: inline `[source: <channel/file> or <url>]`.
+- Highlight cross-channel connections and themes.
+
+OUTPUT FORMAT (markdown):
+# Omni: {query}
+
+## Summary
+<concise answer, 3-5 sentences>
+
+## Findings by Channel
+### #<channel-name>
+- <finding> [source: ...]
+
+## Cross-Channel Connections
+<how findings from different channels relate>
+
+## Sources
+- <path or url>: <one-line description>
+"""
+
+        # cwd=Channels/ so the CLI can read across all channels (omni's whole
+        # point) but is sandboxed from bot-home/, openviking/, and ov.conf.
+        handle = await self.agent.cli_brain.stream(
+            prompt=prompt,
+            cwd=config.CHANNELS_PATH,
         )
+        report = await self._render_stream_to_channel(
+            channel, header=f"🌐 Gemini CLI synthesizing: {query}...", handle=handle,
+        )
+
+        if not report.strip():
+            await channel.send("⚠️ Omni synthesis produced no output.")
+            return
+
         suffix = interaction_id or int(datetime.datetime.now().timestamp())
         filename = f"OMNI-{datetime.date.today()}-{suffix}.md"
         file_path = os.path.join(channel_path, filename)
         lineage = f"\n\n---\n**Lineage:**\n- Path: {file_path}\n- URI: viking://{guild.name}/omni/{filename}"
-        self.kb.write_file(file_path, result + lineage)
+        self.kb.write_file(file_path, report + lineage)
 
         commit_msg = await asyncio.to_thread(
             self.agent.generate_commit_message,

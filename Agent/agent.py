@@ -1,4 +1,6 @@
 import os
+import re
+import asyncio
 import subprocess
 import requests
 from bs4 import BeautifulSoup
@@ -101,14 +103,22 @@ class GeminiCLIBrain(LLMBrain):
     Used for all commands (!organize, !consolidate, !research, !omni).
     """
 
-    def __init__(self, yolo: bool = True):
+    def __init__(self, yolo: bool = True, model: str = None):
         self.yolo = yolo
+        self.model = model or config.GEMINI_CLI_MODEL
+        # Subprocess env with GEMINI_CLI_HOME rerooted to the Thought-scoped
+        # bot-home dir, so the CLI uses its own settings.json (no merge with
+        # the user's ~/.gemini/settings.json — no shared hooks/telemetry).
+        # Snapshotted once at init; the bot's process env doesn't change at runtime.
+        self.env = {**os.environ, "GEMINI_CLI_HOME": config.GEMINI_CLI_HOME_DIR}
 
     def build_args(self) -> list[str]:
         """Return subprocess args. Prompt is passed via stdin to avoid OS arg length limits."""
         args = ["gemini"]
         if self.yolo:
             args.append("-y")
+        if self.model:
+            args += ["-m", self.model]
         return args
 
     def _build_prompt(self, instruction: str, context: str = None,
@@ -124,14 +134,70 @@ class GeminiCLIBrain(LLMBrain):
         parts.append(f"[User]\n{instruction}")
         return "\n\n".join(parts)
 
+    # ANSI escape stripper for CLI stdout (Gemini CLI emits colored progress).
+    _ANSI_RE = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+
     def run_command(self, instruction: str, context: str = None) -> str:
         prompt = self._build_prompt(instruction, context)
         result = subprocess.run(
             self.build_args(),
             input=prompt,
-            capture_output=True, text=True, timeout=300
+            capture_output=True, text=True, timeout=300,
+            env=self.env,
         )
         return result.stdout.strip() or result.stderr.strip()
+
+    async def stream(self, prompt: str, cwd: str) -> "CliStream":
+        """Spawn the CLI and return an async-iterable handle.
+
+        Env (GEMINI_CLI_HOME) and args (yolo/model) are always injected —
+        callers don't need to know the CLI's invocation details. The prompt
+        is piped via stdin (avoids OS arg length limits). `cwd` defines the
+        CLI's workspace root — scope carefully to restrict file access.
+
+        Usage:
+            handle = await brain.stream(prompt, cwd=channel_path)
+            async for line in handle:
+                ...   # ANSI-stripped, empty lines skipped
+            if handle.returncode != 0:
+                ...   # inspect failure
+        """
+        args = self.build_args()
+        proc = await asyncio.create_subprocess_exec(
+            *args,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            cwd=cwd,
+            env=self.env,
+        )
+        proc.stdin.write(prompt.encode())
+        await proc.stdin.drain()
+        proc.stdin.close()
+        return CliStream(proc, self._ANSI_RE)
+
+
+class CliStream:
+    """Async-iterable wrapper around a running Gemini CLI subprocess.
+    Yields ANSI-stripped, non-empty lines. `returncode` is populated once
+    iteration completes (or is aborted)."""
+
+    def __init__(self, proc, ansi_re):
+        self._proc = proc
+        self._ansi = ansi_re
+        self.returncode: int | None = None
+
+    def __aiter__(self):
+        return self._iter()
+
+    async def _iter(self):
+        try:
+            async for raw in self._proc.stdout:
+                line = self._ansi.sub('', raw.decode(errors="replace").rstrip())
+                if line:
+                    yield line
+        finally:
+            self.returncode = await self._proc.wait()
 
     def chat(self, system_ctx: str, history: list, message: str, tools: list = None) -> str:
         # tools ignored — Gemini CLI manages its own tool loop internally
@@ -153,7 +219,7 @@ class MindSpaceAgent:
             raise ValueError(f"Unknown DIALOGUE_BRAIN_TYPE: '{dt}'. Valid options: 'GoogleGenAISdk', 'litellm'")
 
         # Command brain: !organize, !consolidate, !research, !omni (agentic, file I/O, web search)
-        logger.info("🖥️  MindSpaceAgent: Command brain → Gemini CLI (YOLO mode)")
+        logger.info(f"🖥️  MindSpaceAgent: Command brain → Gemini CLI (YOLO mode, model={config.GEMINI_CLI_MODEL or 'default'})")
         self.cli_brain = GeminiCLIBrain()
 
     def run_command(self, instruction: str, context: str = None) -> str:

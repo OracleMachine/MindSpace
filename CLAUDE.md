@@ -40,16 +40,19 @@ Thought/
 ### Module Responsibilities
 
 - **`bot.py`** — `MindSpaceBot(discord.Client)`: The entry point. Handles `on_message` and routes to commands (`!organize`, `!consolidate`, `!research`), URL ingestion, file ingestion, or passive dialogue.
-- **`agent.py`** — `MindSpaceAgent`: Abstraction over LLM backends. Contains `GoogleGenAIBrain` (default, uses `google-genai` SDK) and `LiteLLMBrain`. Exposes `run_command()`, `engage_dialogue()`, `process_url()`, and `generate_commit_message()`.
+- **`agent.py`** — `MindSpaceAgent`: Dual-brain LLM abstraction. `GoogleGenAIBrain` / `LiteLLMBrain` for dialogue (chat, URL/file analysis, commit messages). `GeminiCLIBrain` for commands — owns the `gemini -y` subprocess, env (`GEMINI_CLI_HOME`) and args injection, and exposes `stream(prompt, cwd)` → `CliStream` async-iterable handle.
 - **`manager.py`** — `KnowledgeBaseManager`: All filesystem and Git operations. Creates per-server repos, manages channel folders, appends thoughts, and performs `git commit` after every active command.
-- **`config.py`** — Centralized config. Key settings: `AGENT_BRAIN_TYPE`, `BASE_STORAGE_PATH`, `CHANNELS_PATH`, `OPENVIKING_DATA_PATH`, `OPENVIKING_CONF_PATH`.
+- **`config.py`** — Centralized config. Key settings: `DIALOGUE_BRAIN_TYPE`, `COMMAND_BRAIN_TYPE`, `BASE_STORAGE_PATH`, `CHANNELS_PATH`, `OPENVIKING_DATA_PATH`, `OPENVIKING_CONF_PATH`, `GEMINI_CLI_HOME_DIR`.
 - **`logger.py`** — `MindSpaceLogger`: Dual-output logger (console + Discord `#system-log` channel via async queue).
 
 ### LLM Brain Selection
 
-Controlled by `config.AGENT_BRAIN_TYPE`:
-- `"sdk"` (default): `GoogleGenAIBrain` — uses `google.genai` SDK directly
-- `"litellm"`: `LiteLLMBrain` — uses LiteLLM for multi-provider support
+Two brains run in parallel, each specialized for its role:
+
+- **Dialogue brain** (`config.DIALOGUE_BRAIN_TYPE`) — passive chat, URL/file analysis, commit messages (fast API calls).
+  - `"GoogleGenAISdk"` (default): `GoogleGenAIBrain` — uses `google.genai` SDK directly.
+  - `"litellm"`: `LiteLLMBrain` — multi-provider via LiteLLM.
+- **Command brain** (`config.COMMAND_BRAIN_TYPE = "gemini-cli"`) — `!organize`, `!research`, `!omni`. Delegates to the Gemini CLI (`gemini -y`) for web search, file I/O, and multi-step agentic loops. Config is isolated via `GEMINI_CLI_HOME=Thought/bot-home` (no merge with the user's `~/.gemini/settings.json`); workspace is sandboxed via `cwd` (channel folder for organize/research, `Channels/` for omni). Output streams live to Discord via `CliStream`.
 
 ### OpenViking & PageIndex
 

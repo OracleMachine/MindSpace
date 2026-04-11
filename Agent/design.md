@@ -12,8 +12,8 @@ The system uses **VikingContextManager** (wrapping OpenViking) for context navig
 
 ## 2. Technical Stack
 
-- **Engine:** Google GenAI SDK (`google-genai`) — default brain (`AGENT_BRAIN_TYPE = "sdk"`)
-- **Alternative Brain:** LiteLLM for multi-provider support (`AGENT_BRAIN_TYPE = "litellm"`)
+- **Dialogue Brain:** Google GenAI SDK (`google-genai`) — passive chat, URL/file analysis, commit messages (`DIALOGUE_BRAIN_TYPE = "GoogleGenAISdk"`); LiteLLM available as an alternative
+- **Command Brain:** Gemini CLI (`gemini -y`) — agentic `!organize` / `!research` / `!omni` with web search, file I/O, multi-step loops (`COMMAND_BRAIN_TYPE = "gemini-cli"`)
 - **Language:** Python 3.12+
 - **Semantic Search:** [OpenViking](https://github.com/volcengine/OpenViking) — wrapped by `VikingContextManager` in `viking.py`; fully integrated
 - **PDF Reasoning:** [PageIndex](https://github.com/VectifyAI/PageIndex) — wrapped by `PageIndexManager` in `pageindex_manager.py`; fully integrated
@@ -48,7 +48,7 @@ The system uses **VikingContextManager** (wrapping OpenViking) for context navig
 | Module | Responsibility |
 | :--- | :--- |
 | `bot.py` | Discord event loop (`on_message`), command routing (prefix `!` and slash `/`), startup sync. Single `KnowledgeBaseManager` instance (`self.kb`) initialized in `on_ready`. `on_guild_join` enforces the single-server constraint by leaving immediately if `self.kb` is already set. |
-| `agent.py` | LLM abstraction (`GoogleGenAIBrain`, `LiteLLMBrain`), dialogue, URL processing, file analysis |
+| `agent.py` | LLM abstraction. `GoogleGenAIBrain` / `LiteLLMBrain` for dialogue (chat, URL/file analysis, commit messages). `GeminiCLIBrain` for commands — exposes `stream(prompt, cwd)` returning a `CliStream` async-iterable handle; env (`GEMINI_CLI_HOME`) and args (`-y`, `-m`) are always injected. |
 | `manager.py` | Filesystem writes, Git commits with lazy re-indexing, per-channel conversation history, stream reads |
 | `tools.py` | `MindSpaceTools`: closure-bound tool functions exposed to the LLM during passive dialogue (list files, search channel KB, search global KB) |
 | `viking.py` | `VikingContextManager`: OpenViking wrapper; channel-scoped and global semantic search modes |
@@ -166,7 +166,44 @@ All output `.md` files are sent back to the Discord channel as Discord file atta
 
 ---
 
-## 9. Implementation Rules
+## 9. Command Brain: Gemini CLI Execution
+
+Active commands (`!organize`, `!research`, `!omni`) delegate to the Gemini CLI subprocess via `GeminiCLIBrain.stream(prompt, cwd)`. The brain owns all invocation details (spawn, env injection, stdin piping, ANSI stripping); `bot.py` stays agnostic.
+
+### 9.1 Config Isolation — `GEMINI_CLI_HOME`
+
+The CLI is invoked with `GEMINI_CLI_HOME=<BASE_STORAGE_PATH>/bot-home` set in the subprocess env. This reroots the CLI's user-scope config away from `~/.gemini/` to an isolated `Thought/bot-home/.gemini/`:
+
+- `settings.json` — bot-specific config (hooks disabled, notifications off, telemetry off — no shared state with the user's interactive CLI)
+- `oauth_creds.json`, `google_accounts.json` — symlinks back to `~/.gemini/` so auth still works
+- `bot-home/` is gitignored
+
+The user's interactive `gemini` sessions in a shell remain untouched.
+
+### 9.2 Workspace Sandboxing — `cwd`
+
+Each command sets `cwd` to the smallest directory the CLI needs. In YOLO mode the agent has unrestricted file access inside its workspace, so this is the primary sandbox boundary:
+
+| Command | `cwd` | Scope rationale |
+| :--- | :--- | :--- |
+| `!organize` | `<channel_path>` | Reorganizes one channel — no cross-channel access needed |
+| `!research` | `<channel_path>` | Report is written back into the same channel |
+| `!omni` | `Channels/` | Cross-channel synthesis requires sibling reads; still sandboxed from `bot-home/`, `openviking/`, `ov.conf` |
+
+**Config scope and workspace scope are independent.** Because the bot config is loaded as user-scope via `GEMINI_CLI_HOME` (not as workspace settings from `cwd/.gemini/`), `cwd` can be tightened to any subtree without losing the bot config. Headless-mode trust (stdin not a TTY) auto-trusts the workspace, so no folder-trust prompt appears.
+
+### 9.3 Live Streaming
+
+`GeminiCLIBrain.stream()` spawns the subprocess and returns a `CliStream` handle — an async-iterable that yields ANSI-stripped, non-empty lines as the CLI emits them, and exposes `.returncode` once iteration completes. Two consumption patterns:
+
+- **Discord UI** (`!organize`, `!omni`): `bot._render_stream_to_channel(channel, header, handle)` edits a single live Discord message every ~2 seconds with the latest output tail, then marks it complete.
+- **Console + interaction edit** (`!research`): the handler iterates `async for line in handle` directly — each line is logged to the server console, and the deferred `/research` interaction's "thinking..." message is updated in place (no follow-up spam).
+
+Either way, the event loop stays responsive throughout the multi-minute CLI run.
+
+---
+
+## 10. Implementation Rules
 
 - **One process per Discord Server.** `KnowledgeBaseManager` is lazy-loaded per guild in `bot.py`.
 - **Every active command** (`!` / `/`) is followed by a `git commit` with an AI-generated message explaining intent.
