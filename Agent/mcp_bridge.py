@@ -55,6 +55,9 @@ class MCPSessionPool:
     def __init__(self, servers: dict):
         self.servers = servers or {}
         self.sessions: dict = {}
+        # Per-server cached tool list from list_tools() at connect time.
+        # {server_name: [tool_name, ...]}. Consumed by preflight for reporting.
+        self.tool_lists: dict = {}
         self._exit_stack: Optional[AsyncExitStack] = None
 
     async def connect(self) -> None:
@@ -87,7 +90,14 @@ class MCPSessionPool:
                 )
                 await session.initialize()
                 self.sessions[name] = session
-                logger.info(f"MCP: connected → {name} ({url})")
+                try:
+                    tools_resp = await session.list_tools()
+                    tool_names = [t.name for t in tools_resp.tools]
+                    self.tool_lists[name] = tool_names
+                    logger.info(f"MCP: connected → {name} ({url}) — {len(tool_names)} tool(s)")
+                except Exception as e:
+                    self.tool_lists[name] = []
+                    logger.warning(f"MCP: connected {name} but list_tools failed: {e!r}")
             except (Exception, asyncio.CancelledError) as e:
                 # CancelledError propagates from anyio cancel scopes when the
                 # underlying HTTP stream errors out (e.g., connection refused).
@@ -103,3 +113,4 @@ class MCPSessionPool:
                 logger.warning(f"MCP: error closing session pool: {e}")
         self._exit_stack = None
         self.sessions = {}
+        self.tool_lists = {}

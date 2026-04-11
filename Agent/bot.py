@@ -636,20 +636,41 @@ OUTPUT FORMAT (markdown):
 
             status_msg = await message.channel.send("🧠 **Thinking...**")
 
+            # AFC invokes sync tool wrappers on worker threads — we bounce the
+            # Discord edit back onto this loop via run_coroutine_threadsafe.
+            loop = asyncio.get_running_loop()
+
             async def on_progress(text: str):
                 try:
                     await status_msg.edit(content=f"🧠 **Thinking...**\n{text}")
                 except Exception:
                     pass
 
+            def _wrap_tool(fn):
+                doc = (fn.__doc__ or "").strip().splitlines()[0] if fn.__doc__ else ""
+                label = f"🔧 `{fn.__module__}.{fn.__name__}`"
+                if doc:
+                    label += f" — {doc}"
+
+                @functools.wraps(fn)
+                def inner(*args, **kwargs):
+                    try:
+                        asyncio.run_coroutine_threadsafe(on_progress(label), loop)
+                    except Exception:
+                        pass
+                    return fn(*args, **kwargs)
+                return inner
+
+            wrapped_tools = [_wrap_tool(t) for t in available_tools]
+
             reply, thought = await self.agent.engage_dialogue(
                 message.content,
                 channel_name,
                 history=self.kb.get_history(channel_name),
                 stream_content=self.kb.get_stream_content(channel_name),
-                tools=available_tools,
+                tools=wrapped_tools,
                 mcp_sessions=self.mcp_pool.sessions if self.mcp_pool else None,
-                on_progress=on_progress
+                on_progress=on_progress,
             )
 
             try:
@@ -717,14 +738,10 @@ def _preflight_check():
             pool = mcp_bridge.MCPSessionPool(config.MCP_SERVERS)
             await pool.connect()
             try:
-                for session in pool.sessions:
-                    try:
-                        tools_resp = await session.list_tools()
-                        logger.info(
-                            f"Preflight: MCP session exposes {len(tools_resp.tools)} tool(s)"
-                        )
-                    except Exception as e:
-                        logger.warning(f"Preflight: MCP list_tools failed: {e}")
+                for name, tool_names in pool.tool_lists.items():
+                    logger.info(
+                        f"Preflight: MCP — {name} exposes {len(tool_names)} tool(s)"
+                    )
                 connected = len(pool.sessions)
                 total = len(config.MCP_SERVERS)
                 if connected == 0:

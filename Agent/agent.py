@@ -88,10 +88,7 @@ class GoogleGenAIBrain(LLMBrain):
             if tools:
                 kwargs["tools"] = tools
                 kwargs["automatic_function_calling"] = types.AutomaticFunctionCallingConfig(disable=False)
-                kwargs["tool_config"] = types.ToolConfig(
-                    include_server_side_tool_invocations=True,
-                )
-            
+
             cfg = types.GenerateContentConfig(**kwargs) if kwargs else None
             response = self.client.models.generate_content(
                 model=self.model,
@@ -104,7 +101,9 @@ class GoogleGenAIBrain(LLMBrain):
 
     async def achat(self, system_ctx: str, history: list, message: str,
                     tools: list = None, mcp_sessions: list = None, on_progress=None) -> str:
-        """Async multi-turn call with manual tool loop for intermediate step reporting."""
+        """Async multi-turn call. MCP sessions are passed straight through —
+        google-genai handles tool discovery + dispatch on ClientSession objects via AFC.
+        `on_progress` is not used here; progress is emitted by tool wrappers at the call site."""
         logger.debug(
             f"GoogleGenAI.achat system_ctx ({len(system_ctx or '')} chars):\n{system_ctx}\n"
             f"--- history ({len(history)} turns) ---\n"
@@ -114,135 +113,31 @@ class GoogleGenAIBrain(LLMBrain):
         contents = []
         for role, content in history:
             gemini_role = "model" if role == "assistant" else "user"
-            contents.append(types.Content(role=gemini_role, parts=[types.Part.from_text(text=content)]))
-        contents.append(types.Content(role="user", parts=[types.Part.from_text(text=message)]))
+            contents.append({"role": gemini_role, "parts": [{"text": content}]})
+        contents.append({"role": "user", "parts": [{"text": message}]})
 
         combined_tools = list(tools or [])
         if mcp_sessions:
-            # mcp_sessions is {name: ClientSession}
+            # mcp_sessions is {name: ClientSession}; AFC consumes the ClientSession objects directly.
             combined_tools.extend(mcp_sessions.values())
 
-        # Mapping for manual tool execution (local tools only)
-        # Filter out built-in tools (like GoogleSearchRetrieval) which don't have __name__
-        tool_map = {t.__name__: t for t in (tools or []) if getattr(t, '__name__', None)}
+        try:
+            kwargs = {}
+            if system_ctx:
+                kwargs["system_instruction"] = system_ctx
+            if combined_tools:
+                kwargs["tools"] = combined_tools
+                kwargs["automatic_function_calling"] = types.AutomaticFunctionCallingConfig(disable=False)
 
-        kwargs = {}
-        if system_ctx:
-            kwargs["system_instruction"] = system_ctx
-        if combined_tools:
-            kwargs["tools"] = combined_tools
-
-        # We MUST disable automatic calling to intercept intermediate steps
-        config_no_auto = types.GenerateContentConfig(
-            **kwargs,
-            automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
-            tool_config=types.ToolConfig(
-                include_server_side_tool_invocations=True,
+            cfg = types.GenerateContentConfig(**kwargs) if kwargs else None
+            response = await self.client.aio.models.generate_content(
+                model=self.model,
+                contents=contents,
+                config=cfg
             )
-        ) if kwargs else None
-
-        max_turns = 10
-        turn = 0
-        full_text = ""
-
-        while turn < max_turns:
-            turn += 1
-            logger.debug(f"--- [achat] Turn {turn}/{max_turns} ---")
-            try:
-                response = await self.client.aio.models.generate_content(
-                    model=self.model,
-                    contents=contents,
-                    config=config_no_auto
-                )
-
-                if not response.candidates:
-                    logger.warning("[achat] No candidates in response.")
-                    break
-
-                candidate = response.candidates[0]
-                if not candidate.content.parts:
-                    logger.debug(f"[achat] No parts in content. Finish reason: {candidate.finish_reason}")
-                    break
-
-                # Record model's response (text or tool calls)
-                model_content = candidate.content
-                contents.append(model_content)
-
-                # The SDK might return tool_call or function_call depending on the model/version
-                tool_calls = [p.tool_call or p.function_call for p in model_content.parts if p.tool_call or p.function_call]
-                text_parts = [p.text for p in model_content.parts if p.text]
-
-                for text in text_parts:
-                    if text: full_text += text
-
-                if not tool_calls:
-                    break
-
-                # Handle tool calls
-                tool_responses = []
-                for tc in tool_calls:
-                    # Built-in tools like google_search are ToolCall objects (no .name), 
-                    # while custom tools are FunctionCall objects (have .name).
-                    tool_name = getattr(tc, 'name', None)
-                    if not tool_name:
-                        logger.debug(f"Skipping ToolCall without name (likely server-side): {tc}")
-                        continue
-
-                    args = tc.args or {}
-                    
-                    progress_msg = f"🛠️ Using tool: `{tool_name}`"
-                    logger.info(progress_msg)
-                    if on_progress:
-                        await on_progress(progress_msg)
-                    
-                    result = None
-                    try:
-                        if tool_name in tool_map:
-                            if asyncio.iscoroutinefunction(tool_map[tool_name]):
-                                result = await tool_map[tool_name](**args)
-                            else:
-                                result = tool_map[tool_name](**args)
-                        elif mcp_sessions:
-                            for source, session in mcp_sessions.items():
-                                try:
-                                    res = await session.call_tool(tool_name, args)
-                                    res_content = getattr(res, 'content', [])
-                                    if res_content:
-                                        # Report the source
-                                        source_msg = f"🛠️ Using tool: `{tool_name}` (from `{source}`)"
-                                        logger.info(source_msg)
-                                        if on_progress:
-                                            await on_progress(source_msg)
-
-                                        result = "\n".join([getattr(c, 'text', '') for c in res_content if getattr(c, 'text', None)])
-                                        break
-                                except Exception:
-                                    continue
-                        
-                        if result is None:
-                            result = f"Error: Tool '{tool_name}' not found."
-                    except Exception as e:
-                        logger.error(f"Tool Error ({tool_name}): {e}")
-                        result = f"Error: {str(e)}"
-
-                    tool_responses.append(types.Part.from_function_response(
-                        name=tool_name,
-                        response={"result": result}
-                    ))
-
-                if tool_responses:
-                    contents.append(types.Content(role="user", parts=tool_responses))
-                else:
-                    break
-
-            except Exception as e:
-                logger.error(f"Google GenAI achat Error: {e}")
-                full_text += f"\n\n⚠️ Error: {str(e)}"
-                break
-
-        if not full_text.strip():
-            return "⚠️ Brain returned an empty response (possibly blocked or model error)."
-        return full_text.strip()
+            return response.text.strip()
+        except Exception as e:
+            raise Exception(f"Google GenAI SDK Error: {str(e)}")
 
 class GeminiCLIBrain(LLMBrain):
     """
@@ -427,11 +322,7 @@ class MindSpaceAgent:
         )
         system_ctx = "\n\n".join(system_parts)
 
-        # Enable built-in Google Search for the dialogue brain
-        dialogue_tools = list(tools or [])
-        dialogue_tools.append(types.Tool(google_search=types.GoogleSearch()))
-
-        response = await self.brain.achat(system_ctx, [], user_message, tools=dialogue_tools, mcp_sessions=mcp_sessions, on_progress=on_progress)
+        response = await self.brain.achat(system_ctx, [], user_message, tools=tools, mcp_sessions=mcp_sessions, on_progress=on_progress)
         reply = response
         thought = None
         if "THOUGHT:" in response:
