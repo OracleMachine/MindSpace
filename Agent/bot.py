@@ -456,7 +456,8 @@ OUTPUT FORMAT (markdown):
                 if channel_name not in existing_names:
                     try:
                         await guild.create_text_channel(channel_name)
-                        logger.info(f"Created Discord channel #{channel_name} for existing KB folder", guild)
+                        git_info = self.kb._repo.git.describe("--tags", "--dirty", "--always")
+                        logger.info(f"Created Discord channel #{channel_name} for existing KB folder (Git: {git_info})", guild)
                     except Exception as e:
                         logger.error(f"Could not create channel #{channel_name}: {e}", guild)
         except Exception as e:
