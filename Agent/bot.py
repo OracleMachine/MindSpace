@@ -1,10 +1,29 @@
 import discord
 import os
+import re
 import datetime
 import config
 import asyncio
 import functools
 from discord import app_commands
+
+
+def _slugify_subject(text: str, max_len: int = 50) -> str:
+    """Filesystem-safe kebab-case slug from free text, used as the SUBJECT
+    segment of TYPE-DATE-SUBJECT output filenames. Falls back to 'untitled'
+    for empty / unslugifiable input."""
+    s = re.sub(r"[^\w\s-]", "", text.lower())
+    s = re.sub(r"[\s_]+", "-", s).strip("-")
+    return s[:max_len].rstrip("-") or "untitled"
+
+
+def _extract_title(markdown: str) -> str | None:
+    """Return the first H1 (# …) text, or None if absent."""
+    for line in markdown.splitlines():
+        line = line.strip()
+        if line.startswith("# "):
+            return line[2:].strip()
+    return None
 from agent import MindSpaceAgent
 from tools import MindSpaceTools
 from manager import KnowledgeBaseManager
@@ -192,8 +211,8 @@ WHEN DONE, output ONLY this markdown report (no other prose):
             self.agent.run_command,
             f"Synthesize these thoughts into a structured permanent article:\n\n{content}"
         )
-        suffix = interaction_id or int(datetime.datetime.now().timestamp())
-        filename = f"ARTICLE-{datetime.date.today()}-{suffix}.md"
+        subject = _slugify_subject(_extract_title(synthesis) or channel_name)
+        filename = f"ARTICLE-{datetime.date.today()}-{subject}.md"
         file_path = os.path.join(channel_path, filename)
         self.kb.write_file(file_path, synthesis)
         self.kb.write_file(stream_file, f"# Stream of Consciousness: {channel_name}\n\n")
@@ -312,8 +331,8 @@ OUTPUT FORMAT (markdown, no extra prose outside this structure):
 
         logger.debug(f"RESEARCH: report preview:\n{report[:500]}...")
 
-        suffix = (interaction.id if interaction else int(datetime.datetime.now().timestamp()))
-        filename = f"RESEARCH-{datetime.date.today()}-{suffix}.md"
+        subject = _slugify_subject(topic)
+        filename = f"RESEARCH-{datetime.date.today()}-{subject}.md"
         file_path = os.path.join(channel_path, filename)
         lineage = f"\n\n---\n**Lineage:**\n- Path: {file_path}\n- URI: viking://{guild.name}/{channel_name}/{filename}"
         self.kb.write_file(file_path, report + lineage)
@@ -392,8 +411,8 @@ OUTPUT FORMAT (markdown):
             await channel.send("⚠️ Omni synthesis produced no output.")
             return
 
-        suffix = interaction_id or int(datetime.datetime.now().timestamp())
-        filename = f"OMNI-{datetime.date.today()}-{suffix}.md"
+        subject = _slugify_subject(query)
+        filename = f"OMNI-{datetime.date.today()}-{subject}.md"
         file_path = os.path.join(channel_path, filename)
         lineage = f"\n\n---\n**Lineage:**\n- Path: {file_path}\n- URI: viking://{guild.name}/omni/{filename}"
         self.kb.write_file(file_path, report + lineage)
@@ -541,7 +560,8 @@ OUTPUT FORMAT (markdown):
             markdown_snapshot = await asyncio.to_thread(
                 self.agent.process_url, message.content, channel_name
             )
-            filename = f"WEBPAGE-{datetime.date.today()}-{message.id}.md"
+            subject = _slugify_subject(_extract_title(markdown_snapshot) or "webpage")
+            filename = f"WEBPAGE-{datetime.date.today()}-{subject}.md"
             file_path = os.path.join(channel_path, filename)
             self.kb.write_file(file_path, markdown_snapshot)
 

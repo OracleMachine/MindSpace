@@ -155,10 +155,10 @@ Keys are file paths relative to `Channels/`. Values track the file's mtime at th
 | Trigger | Action | Output file |
 | :--- | :--- | :--- |
 | `!organize` / `/organize` | Scans untracked files, runs semantic reasoning, git commit | — |
-| `!consolidate` / `/consolidate` | Synthesizes `stream_of_conscious.md` into a permanent article, clears stream, git commit | `ARTICLE-<date>-<id>.md` |
-| `!research [topic]` / `/research` | Deep-dive on topic using Viking + PageIndex context, git commit | `RESEARCH-<date>-<id>.md` |
-| `!omni [query]` / `/omni` | Cross-KB synthesis across **all** channel folders (global Viking traversal), git commit | `OMNI-<date>-<id>.md` |
-| URL in message | Fetches page, converts to Markdown snapshot, git commit | `WEBPAGE-<date>-<id>.md` |
+| `!consolidate` / `/consolidate` | Synthesizes `stream_of_conscious.md` into a permanent article, clears stream, git commit | `ARTICLE-<date>-<subject>.md` |
+| `!research [topic]` / `/research` | Deep-dive on topic using Viking + PageIndex context, git commit | `RESEARCH-<date>-<subject>.md` |
+| `!omni [query]` / `/omni` | Cross-KB synthesis across **all** channel folders (global Viking traversal), git commit | `OMNI-<date>-<subject>.md` |
+| URL in message | Fetches page, converts to Markdown snapshot, git commit | `WEBPAGE-<date>-<subject>.md` |
 | File attachment | Saves and semantically analyzes file (PDF via PageIndex, others via LLM), git commit | — |
 | Plain text | Passive dialogue: replies + tool access to KB + silently extracts `THOUGHT:` block to `stream_of_conscious.md` | — |
 
@@ -209,5 +209,5 @@ Either way, the event loop stays responsive throughout the multi-minute CLI run.
 - **Every active command** (`!` / `/`) is followed by a `git commit` with an AI-generated message explaining intent.
 - **Bot is quiet.** No unprompted messages, no pinned maps, no ASCII trees.
 - **Instant file delivery.** Every new `.md` file created is sent back to Discord as an attachment.
-- **File naming:** all output markdown files use lowercase `.md` extension with `TYPE-DATE-ID` format.
+- **File naming:** all output markdown files use lowercase `.md` extension with `TYPE-DATE-SUBJECT` format, where SUBJECT is a kebab-case slug derived from the topic/query/title (or extracted from the first H1 for consolidate/webpage). This keeps filenames human-scannable in `ls` and searchable by keyword.
 - **Preflight check on startup:** validates that PageIndex, OpenViking, and GitPython are installed and that API keys are functional before the Discord connection is established.
