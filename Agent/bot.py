@@ -667,6 +667,39 @@ def _preflight_check():
         ov_client.close()
     except Exception as e:
         raise RuntimeError(f"API key validation failed: {e}")
+
+    # MCP servers — connect once to verify reachability and advertise tool counts.
+    # Per-server failures are logged but do not abort startup (matches runtime
+    # pool behavior: a transient MCP outage shouldn't take the bot down).
+    if config.MCP_SERVERS:
+        logger.info(f"Preflight: probing {len(config.MCP_SERVERS)} MCP server(s)...")
+        import mcp_bridge
+
+        async def _probe_mcp():
+            pool = mcp_bridge.MCPSessionPool(config.MCP_SERVERS)
+            await pool.connect()
+            try:
+                for session in pool.sessions:
+                    try:
+                        tools_resp = await session.list_tools()
+                        logger.info(
+                            f"Preflight: MCP session exposes {len(tools_resp.tools)} tool(s)"
+                        )
+                    except Exception as e:
+                        logger.warning(f"Preflight: MCP list_tools failed: {e}")
+                connected = len(pool.sessions)
+                total = len(config.MCP_SERVERS)
+                if connected == 0:
+                    logger.warning(f"Preflight: MCP — 0/{total} servers reachable")
+                else:
+                    logger.info(f"Preflight: MCP — {connected}/{total} servers reachable")
+            finally:
+                await pool.close()
+
+        asyncio.run(_probe_mcp())
+    else:
+        logger.debug("Preflight: no MCP servers configured, skipping probe")
+
     logger.info("Preflight: all checks passed")
 
 
