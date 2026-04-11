@@ -53,7 +53,8 @@ The system uses **VikingContextManager** (wrapping OpenViking) for context navig
 | `tools.py` | `MindSpaceTools`: closure-bound tool functions exposed to the LLM during passive dialogue (list files, search channel KB, search global KB) |
 | `viking.py` | `VikingContextManager`: OpenViking wrapper; channel-scoped and global semantic search modes |
 | `pageindex_manager.py` | `PageIndexManager`: PageIndex cloud API wrapper; PDF upload, async processing, channel-scoped deep Q&A |
-| `config.py` | Centralized configuration for paths, models, brain type, history char limit |
+| `mcp_bridge.py` | MCP (Model Context Protocol) integration. Handles two-pronged sync: rendering `config.yaml` servers into Gemini CLI's `settings.json` for active commands, and managing an `MCPSessionPool` for native SDK tool use in passive dialogue. |
+| `config.py` | Centralized configuration for paths, models, brain type, history char limit, and MCP server definitions. |
 | `logger.py` | Dual-output logger: console (all levels) + Discord `#system-log` (INFO and above, guild-scoped) |
 
 ---
@@ -225,4 +226,52 @@ The bot's `git_commit()` deliberately stages **only** paths under `Channels/` (`
 
 **Why:** `Thought/` also holds `openviking/` (regenerable vector store, churns on every run), `bot-home/` (isolated Gemini CLI config), and local bookkeeping caches (`.viking_index.json`, `.pageindex_index.json`). Letting the bot auto-stage those would pollute the KB history with library runtime noise — and worse, would feed OpenViking's own internal `.md` artifacts back into `index_file()`, producing nonsensical channel names like `..` and corrupting the store.
 
-**What this means for the user:** the repo can still track anything you want for manual inspection or archival — `git add -A` by hand is fine, and a full snapshot of `openviking/` state is useful for diffing or debugging. The bot simply refuses to do it for you. Bot commits stay content-only; manual commits can touch anything. The two histories interleave cleanly.
+**Note:** the repo can still track anything you want for manual inspection or archival — `git add -A` by hand is fine, and a full snapshot of `openviking/` state is useful for diffing or debugging. The bot simply refuses to do it for you. Bot commits stay content-only; manual commits can touch anything. The two histories interleave cleanly.
+
+---
+
+## 11. MCP Integration (Model Context Protocol)
+
+MindSpace integrates MCP servers defined in `config.yaml` using a dual-path strategy to ensure consistent tool availability across both dialogue and active commands.
+
+### 11.1 Active Commands (Gemini CLI)
+
+When the bot starts, `mcp_bridge.sync_cli_settings()` reads the `mcp.servers` dictionary from `config.yaml` and renders it into the Gemini CLI's isolated `settings.json` (located at `<BASE_STORAGE_PATH>/bot-home/.gemini/settings.json`).
+
+- This makes all MCP tools (e.g., Wisburg, Google Search) available to `!organize`, `!research`, and `!omni` via the CLI's native agentic loop.
+- Servers are added to the `mcpServers` key in the CLI config.
+
+### 11.2 Passive Dialogue (Google GenAI SDK)
+
+For the "passive" chat brain (`GoogleGenAIBrain`), the bot maintains a live `MCPSessionPool`.
+
+- **Connection:** On startup, `MCPSessionPool.connect()` opens persistent `mcp.ClientSession`s over streamable HTTP for each configured server.
+- **Discovery:** The pool is passed to the brain during `engage_dialogue`. The Google GenAI SDK natively discovers these as tools and handles the dispatch loop (call → response → repeat) without manual bot intervention.
+- **Resilience:** MCP connection failures or timeouts are logged as warnings but do not block the bot from starting, ensuring transient service outages don't take down the entire system.
+
+### 11.3 Configuration
+
+MCP servers are configured in `config.yaml` under the `mcp.servers` key, supporting environment variable expansion (e.g., `${WISBURG_MCP_TOKEN}`):
+
+```yaml
+mcp:
+  servers:
+    wisburg:
+      url: https://mcp.wisburg.com/mcp
+      headers:
+        Authorization: Bearer ${WISBURG_MCP_TOKEN}
+
+### 11.4 Understanding MCP Sessions & Workflow
+
+An **MCP Session** is a live JSON-RPC connection (usually over Streamable HTTP/SSE) between the bot and a tool provider. Unlike static API keys, a session is an active channel that allows the LLM to discover and invoke tools dynamically.
+
+**The Execution Workflow:**
+1.  **Discovery & Connection:** At startup, `MCPSessionPool` establishes persistent connections to all configured servers.
+2.  **Injection:** These active sessions are passed to the `GoogleGenAIBrain`. The SDK automatically advertises the available MCP tools to the Gemini model as functional capabilities.
+3.  **The Tool Call Loop:** 
+    *   The LLM decides a tool is needed and emits a call.
+    *   The SDK sends a `tools/call` request through the **MCP Session**.
+    *   The MCP Server executes the local logic (e.g., database query, web fetch) and returns the result.
+    *   The SDK feeds the result back to the LLM.
+4.  **Synthesis:** The LLM incorporates the tool data into its final response to the user.
+```
