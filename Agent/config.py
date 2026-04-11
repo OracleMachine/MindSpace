@@ -37,7 +37,6 @@ _brains = _cfg.get("brains", {})
 DIALOGUE_BRAIN_TYPE = _brains.get("dialogue_type", "GoogleGenAISdk")
 COMMAND_BRAIN_TYPE = _brains.get("command_type", "gemini-cli")
 GEMINI_SDK_MODEL = _brains.get("gemini_sdk_model", "gemini-3-flash-preview")
-LITELLM_MODEL = _brains.get("litellm_model", "gemini/gemini-3-flash-preview")
 GEMINI_CLI_MODEL = _brains.get("gemini_cli_model", "auto-gemini-3")
 
 # --- Conversation ---
