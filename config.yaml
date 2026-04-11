@@ -4,7 +4,7 @@ log:
   stream_level: DEBUG   # console handler — DEBUG | INFO | WARNING | ERROR
   file_level: DEBUG     # file handler — usually more verbose than stream
   discord_level: INFO   # Discord #system-log channel
-  file_path: ~/logs/MindSpace/mindspace.log  # ~ expanded; relative paths resolve under storage.base_path; rotates daily, keeps 3 days
+  file_path: ~/.logs/MindSpace/mindspace.log  # ~ expanded; relative paths resolve under storage.base_path; rotates daily, keeps 3 days
 
 storage:
   base_path: /home/yolo/repos/Thought

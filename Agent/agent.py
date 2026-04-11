@@ -17,6 +17,10 @@ class LLMBrain(ABC):
         pass
 
     @abstractmethod
+    async def run_command_async(self, instruction: str, context: str = None) -> str:
+        pass
+
+    @abstractmethod
     def chat(self, system_ctx: str, history: list, message: str, tools: list = None) -> str:
         """Multi-turn dialogue with persistent system context and conversation history."""
         pass
@@ -53,6 +57,18 @@ class GoogleGenAIBrain(LLMBrain):
             return response.text.strip()
         except Exception as e:
             raise Exception(f"Google GenAI SDK Error: {str(e)}")
+
+    async def run_command_async(self, instruction: str, context: str = None) -> str:
+        full_prompt = f"System Context:\n{context}\n\nUser Message: {instruction}" if context else instruction
+        logger.debug(f"GoogleGenAI.run_command_async prompt ({len(full_prompt)} chars):\n{full_prompt}")
+        try:
+            response = await self.client.aio.models.generate_content(
+                model=self.model,
+                contents=full_prompt
+            )
+            return response.text.strip()
+        except Exception as e:
+            raise Exception(f"Google GenAI SDK Async Error: {str(e)}")
 
     def chat(self, system_ctx: str, history: list, message: str, tools: list = None) -> str:
         """Multi-turn call: system context via system_instruction, history as prior turns."""
@@ -123,32 +139,16 @@ class GoogleGenAIBrain(LLMBrain):
         except Exception as e:
             raise Exception(f"Google GenAI SDK Error: {str(e)}")
 
-class LiteLLMBrain(LLMBrain):
-    def __init__(self, model=config.LITELLM_MODEL):
-        self.model = model
-        if config.GEMINI_API_KEY:
-            os.environ["GEMINI_API_KEY"] = config.GEMINI_API_KEY
-
-    def run_command(self, instruction: str, context: str = None) -> str:
-        messages = []
-        if context:
-            messages.append({"role": "system", "content": context})
-        messages.append({"role": "user", "content": instruction})
-        logger.debug(f"LiteLLM.run_command messages:\n{messages}")
-        try:
-            response = completion(model=self.model, messages=messages)
-            return response.choices[0].message.content.strip()
-        except Exception as e:
-            raise Exception(f"LiteLLM Error: {str(e)}")
-
-    def chat(self, system_ctx: str, history: list, message: str, tools: list = None) -> str:
-        """Multi-turn call: system context as system message, history as prior turns."""
+    async def achat(self, system_ctx: str, history: list, message: str,
+                    tools: list = None, mcp_sessions: list = None) -> str:
+        """Async multi-turn call via litellm.acompletion."""
         logger.debug(
-            f"LiteLLM.chat system_ctx ({len(system_ctx or '')} chars):\n{system_ctx}\n"
+            f"LiteLLM.achat system_ctx ({len(system_ctx or '')} chars):\n{system_ctx}\n"
             f"--- history ({len(history)} turns) ---\n"
             + "\n".join(f"[{r}] {c}" for r, c in history)
             + f"\n--- message ---\n{message}"
         )
+        from litellm import acompletion
         messages = []
         if system_ctx:
             messages.append({"role": "system", "content": system_ctx})
@@ -156,10 +156,10 @@ class LiteLLMBrain(LLMBrain):
             messages.append({"role": role, "content": content})
         messages.append({"role": "user", "content": message})
         try:
-            response = completion(model=self.model, messages=messages)
+            response = await acompletion(model=self.model, messages=messages)
             return response.choices[0].message.content.strip()
         except Exception as e:
-            raise Exception(f"LiteLLM Error: {str(e)}")
+            raise Exception(f"LiteLLM Async Error: {str(e)}")
 
 class GeminiCLIBrain(LLMBrain):
     """
@@ -208,6 +208,32 @@ class GeminiCLIBrain(LLMBrain):
         )
         parts = []
         for line in result.stdout.splitlines():
+            try:
+                data = json.loads(line)
+                if data.get("role") == "assistant":
+                    parts.append(data.get("content", ""))
+            except: continue
+        return "".join(parts).strip()
+
+    async def run_command_async(self, instruction: str, context: str = None) -> str:
+        prompt = self._build_prompt(instruction, context)
+        logger.debug(f"GeminiCLI.run_command_async prompt ({len(prompt)} chars):\n{prompt}")
+        
+        proc = await asyncio.create_subprocess_exec(
+            *self.build_args(),
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=self.env,
+        )
+        
+        stdout, stderr = await proc.communicate(input=prompt.encode())
+        
+        if proc.returncode != 0:
+            logger.warning(f"GeminiCLI.run_command_async failed with code {proc.returncode}: {stderr.decode()}")
+
+        parts = []
+        for line in stdout.decode().splitlines():
             try:
                 data = json.loads(line)
                 if data.get("role") == "assistant":
@@ -309,9 +335,9 @@ class MindSpaceAgent:
         logger.info(f"🖥️  MindSpaceAgent: Command brain → Gemini CLI (YOLO mode, model={config.GEMINI_CLI_MODEL or 'default'})")
         self.cli_brain = GeminiCLIBrain()
 
-    def run_command(self, instruction: str, context: str = None) -> str:
+    async def run_command(self, instruction: str, context: str = None) -> str:
         """Execute a command via the Gemini CLI brain (file I/O, web search, agentic tasks)."""
-        return self.cli_brain.run_command(instruction, context)
+        return await self.cli_brain.run_command(instruction, context)
 
     def close(self):
         if hasattr(self.brain, 'close'):
@@ -348,7 +374,7 @@ class MindSpaceAgent:
             thought = parts[1].strip()
         return reply, thought
 
-    def analyze_file(self, file_path: str, pageindex) -> tuple:
+    async def analyze_file(self, file_path: str, pageindex) -> tuple:
         """
         Analyze an uploaded file. Uses PageIndex for PDFs; reads raw content for other types.
         Returns (doc_id_or_None, analysis_text). Uses dialogue brain (fast API call).
@@ -357,13 +383,13 @@ class MindSpaceAgent:
         channel_name = os.path.basename(os.path.dirname(file_path))
         if ext == ".pdf":
             try:
-                doc_id = pageindex.index_document(file_path, channel_name)
-                tree = pageindex.get_tree(doc_id)
+                doc_id = await asyncio.to_thread(pageindex.index_document, file_path, channel_name)
+                tree = await asyncio.to_thread(pageindex.get_tree, doc_id)
                 prompt = (
                     f"This PDF has been indexed. Its document tree structure:\n\n{tree}\n\n"
                     f"Provide a one-sentence description of the document's content and purpose."
                 )
-                return doc_id, self.brain.run_command(prompt)
+                return doc_id, await self.brain.run_command_async(prompt)
             except Exception:
                 pass
         # Fallback: read raw content
@@ -372,28 +398,30 @@ class MindSpaceAgent:
                 raw = f.read(5000)
         except Exception:
             raw = ""
-        return None, self.brain.run_command(f"Analyze this file content and summarize it:\n\n{raw}")
+        return None, await self.brain.run_command_async(f"Analyze this file content and summarize it:\n\n{raw}")
 
-    def process_url(self, url, channel_name):
+    async def process_url(self, url, channel_name):
         """Fetch URL content and summarize via dialogue brain (fast API call)."""
+        import httpx
         try:
-            headers = {'User-Agent': 'Mozilla/5.0'}
-            resp = requests.get(url, headers=headers, timeout=10)
-            resp.raise_for_status()
-            soup = BeautifulSoup(resp.text, 'html.parser')
-            for script_or_style in soup(["script", "style"]):
-                script_or_style.decompose()
-            text = soup.get_text(separator='\n')
-            prompt = (
-                f"Extract the main article content from this raw webpage text:\n\n{text}\n\n"
-                f"Format it as a clean Markdown file with a human-readable title. "
-                f"Include the original URL ({url}) at the top."
-            )
-            return self.brain.run_command(prompt)
+            async with httpx.AsyncClient(follow_redirects=True, timeout=10.0) as client:
+                headers = {'User-Agent': 'Mozilla/5.0'}
+                resp = await client.get(url, headers=headers)
+                resp.raise_for_status()
+                soup = BeautifulSoup(resp.text, 'html.parser')
+                for script_or_style in soup(["script", "style"]):
+                    script_or_style.decompose()
+                text = soup.get_text(separator='\n')
+                prompt = (
+                    f"Extract the main article content from this raw webpage text:\n\n{text}\n\n"
+                    f"Format it as a clean Markdown file with a human-readable title. "
+                    f"Include the original URL ({url}) at the top."
+                )
+                return await self.brain.run_command_async(prompt)
         except Exception as e:
             return f"Error fetching URL: {str(e)}"
 
-    def generate_commit_message(self, action_description):
+    async def generate_commit_message(self, action_description):
         """Generate a commit message via dialogue brain (lightweight, fast API call)."""
         prompt = f"Generate a one-sentence Git commit message explaining the intent behind this action: {action_description}"
-        return self.brain.run_command(prompt)
+        return await self.brain.run_command_async(prompt)

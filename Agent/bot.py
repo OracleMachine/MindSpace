@@ -35,7 +35,6 @@ import mcp_bridge
 class MindSpaceBot(discord.Client):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        logger.bind_bot(self)
         self.agent = None  # initialized in setup_hook (inside the event loop)
         self.kb = None     # initialized in on_ready (after guild info available)
         self.tools = None
@@ -81,6 +80,12 @@ class MindSpaceBot(discord.Client):
 
         # Initialize the SINGLE KnowledgeBaseManager for the first guild
         guild = self.guilds[0]
+        
+        # Inject logging callback
+        async def discord_log_callback(msg: str):
+            await self.send_system_log(guild, msg)
+        logger.set_callback(discord_log_callback)
+
         if self.kb is None:
             self.kb = KnowledgeBaseManager(guild.name)
             self.tools = MindSpaceTools(self.kb)
@@ -426,8 +431,7 @@ OUTPUT FORMAT (markdown):
         lineage = f"\n\n---\n**Lineage:**\n- Path: {file_path}\n- URI: viking://{guild.name}/omni/{filename}"
         self.kb.write_file(file_path, report + lineage)
 
-        commit_msg = await asyncio.to_thread(
-            self.agent.generate_commit_message,
+        commit_msg = await self.agent.generate_commit_message(
             f"Omni query synthesis: {query}"
         )
         await asyncio.to_thread(self.kb.save_state, commit_msg)
@@ -473,12 +477,26 @@ OUTPUT FORMAT (markdown):
             self.kb.seed_history(channel.name, text)
             logger.info(f"Seeded #{channel.name} with {len(entries)} messages from Discord")
 
+    async def _log_publisher(self):
+        """Background task to drain the internal log queue and send to Discord."""
+        while True:
+            msg = await self._log_queue.get()
+            try:
+                # We log to the first guild by default
+                if self.guilds:
+                    await self.send_system_log(self.guilds[0], msg)
+            except Exception as e:
+                # Don't use logger.error here or you'll loop!
+                print(f"Failed to send log to Discord: {e}")
+            finally:
+                self._log_queue.task_done()
+
     async def close(self):
         """Cleanly shut down: close GenAI client and cancel background tasks."""
-        if hasattr(self, 'log_task') and not self.log_task.done():
-            self.log_task.cancel()
+        if self._log_publisher_task and not self._log_publisher_task.done():
+            self._log_publisher_task.cancel()
             try:
-                await self.log_task
+                await self._log_publisher_task
             except asyncio.CancelledError:
                 pass
 
@@ -569,16 +587,13 @@ OUTPUT FORMAT (markdown):
         # --- 2. KNOWLEDGE INGESTION (URLs / file attachments) ---
         elif "http://" in message.content or "https://" in message.content:
             await message.channel.send("🌐 URL detected. Snapshotting to KB...")
-            markdown_snapshot = await asyncio.to_thread(
-                self.agent.process_url, message.content, channel_name
-            )
+            markdown_snapshot = await self.agent.process_url(message.content, channel_name)
             subject = _slugify_subject(_extract_title(markdown_snapshot) or "webpage")
             filename = f"WEBPAGE-{datetime.date.today()}-{subject}.md"
             file_path = os.path.join(channel_path, filename)
             self.kb.write_file(file_path, markdown_snapshot)
 
-            commit_msg = await asyncio.to_thread(
-                self.agent.generate_commit_message,
+            commit_msg = await self.agent.generate_commit_message(
                 f"Ingested webpage snapshot: {filename}"
             )
             await asyncio.to_thread(self.kb.save_state, commit_msg)
@@ -591,14 +606,11 @@ OUTPUT FORMAT (markdown):
                 file_path = os.path.join(channel_path, attachment.filename)
                 await attachment.save(file_path)
 
-                doc_id, analysis = await asyncio.to_thread(
-                    self.agent.analyze_file, file_path, self.kb.pageindex
-                )
+                doc_id, analysis = await self.agent.analyze_file(file_path, self.kb.pageindex)
                 if doc_id:
                     logger.info(f"**PAGEINDEX**: Indexed `{attachment.filename}` doc_id={doc_id}", message.guild)
 
-                commit_msg = await asyncio.to_thread(
-                    self.agent.generate_commit_message,
+                commit_msg = await self.agent.generate_commit_message(
                     f"Ingested file: {attachment.filename}"
                 )
                 await asyncio.to_thread(self.kb.save_state, commit_msg)
