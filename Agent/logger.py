@@ -1,6 +1,10 @@
 import logging
+import logging.handlers
 import asyncio
 import datetime
+import os
+
+import config
 
 # --- Standard Logging Setup ---
 DEBUG = logging.DEBUG
@@ -8,32 +12,54 @@ INFO = logging.INFO
 WARNING = logging.WARNING
 ERROR = logging.ERROR
 
+_STREAM_LEVEL = getattr(logging, config.LOG_STREAM_LEVEL, logging.INFO)
+_FILE_LEVEL = getattr(logging, config.LOG_FILE_LEVEL, logging.DEBUG)
+_DISCORD_LEVEL = getattr(logging, config.LOG_DISCORD_LEVEL, logging.INFO)
+
+# Format/datefmt only — no `level` kwarg so root logger's level stays at
+# Python's default (WARNING), keeping third-party libs quiet.
 logging.basicConfig(
-    level=logging.INFO,
     format='%(asctime)s [%(levelname)s] %(module)s:%(lineno)d - %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S'
+    datefmt='%Y-%m-%d %H:%M:%S',
 )
 
-# MindSpace gets its own DEBUG-level handler so prompt dumps and other
-# verbose bot logs surface without turning on DEBUG for every third-party
-# library (discord, google-genai, httpx, etc.).
-_internal_logger = logging.getLogger("MindSpace")
-_internal_logger.setLevel(logging.DEBUG)
-_internal_logger.propagate = False
-_ms_handler = logging.StreamHandler()
-_ms_handler.setLevel(logging.DEBUG)
-_ms_handler.setFormatter(logging.Formatter(
+_FORMATTER = logging.Formatter(
     '%(asctime)s [%(levelname)s] %(module)s:%(lineno)d - %(message)s',
     datefmt='%Y-%m-%d %H:%M:%S',
-))
-_internal_logger.addHandler(_ms_handler)
+)
+
+# MindSpace bot logs use their own handlers; logger level is the min of the
+# three sinks so each handler can see everything it's configured for.
+_logger = logging.getLogger("MindSpace")
+_logger.setLevel(min(_STREAM_LEVEL, _FILE_LEVEL, _DISCORD_LEVEL))
+_logger.propagate = False
+
+_stream_handler = logging.StreamHandler()
+_stream_handler.setLevel(_STREAM_LEVEL)
+_stream_handler.setFormatter(_FORMATTER)
+_logger.addHandler(_stream_handler)
+
+try:
+    os.makedirs(os.path.dirname(config.LOG_FILE_PATH), exist_ok=True)
+    # Rotate at midnight, keep 3 days of history (mindspace.log + 3 dated backups).
+    _file_handler = logging.handlers.TimedRotatingFileHandler(
+        config.LOG_FILE_PATH,
+        when="midnight",
+        backupCount=3,
+        encoding="utf-8",
+    )
+    _file_handler.setLevel(_FILE_LEVEL)
+    _file_handler.setFormatter(_FORMATTER)
+    _logger.addHandler(_file_handler)
+except OSError as e:
+    _logger.warning(f"Could not open log file {config.LOG_FILE_PATH}: {e}")
 
 # If you want to see detailed OpenViking semantic search logs, uncomment this:
 # logging.getLogger("openviking").setLevel(logging.DEBUG)
 
 class MindSpaceLogger:
     """Unified global logger that routes logs to Console (sync) and Discord (background)."""
-    def __init__(self, discord_level=logging.INFO):
+    def __init__(self, discord_level=_DISCORD_LEVEL):
         self.bot = None
         self.discord_level = discord_level
         self._queue = asyncio.Queue()
@@ -56,9 +82,9 @@ class MindSpaceLogger:
         level_name = logging.getLevelName(level)
 
         # 1. Immediate Console Log.
-        # stacklevel=3 skips: _internal_logger.X (1) -> _log (2) -> debug/info/... (3)
+        # stacklevel=3 skips: _logger.log (1) -> _log (2) -> debug/info/... (3)
         # so %(module)s and %(lineno)d resolve to the actual caller, not logger.py.
-        _internal_logger.log(level, message, stacklevel=3)
+        _logger.log(level, message, stacklevel=3)
 
         # 2. Queue for Discord Log if bot is active and level is sufficient
         if self.bot and guild and level >= self.discord_level:
@@ -82,7 +108,7 @@ class MindSpaceLogger:
                 if self.bot:
                     await self.bot.send_system_log(guild, formatted_message)
             except Exception as e:
-                _internal_logger.error(f"Failed to send log to Discord: {e}")
+                _logger.error(f"Failed to send log to Discord: {e}")
             finally:
                 self._queue.task_done()
 

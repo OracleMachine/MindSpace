@@ -1,0 +1,26 @@
+# MindSpace configuration. Secrets stay in env vars (see Agent/config.py).
+
+log:
+  stream_level: DEBUG   # console handler — DEBUG | INFO | WARNING | ERROR
+  file_level: DEBUG     # file handler — usually more verbose than stream
+  discord_level: INFO   # Discord #system-log channel
+  file_path: ~/logs/MindSpace/mindspace.log  # ~ expanded; relative paths resolve under storage.base_path; rotates daily, keeps 3 days
+
+storage:
+  base_path: /home/yolo/repos/Thought
+  openviking_uri_prefix: "viking://"
+
+brains:
+  # Dialogue brain: passive chat, URL/file analysis, commit messages.
+  # Options: "GoogleGenAISdk" | "litellm"
+  dialogue_type: GoogleGenAISdk
+  # Command brain: !organize, !consolidate, !research, !omni.
+  command_type: gemini-cli
+
+  gemini_sdk_model: gemini-3-flash-preview
+  litellm_model: gemini/gemini-3-flash-preview
+  # auto-gemini-3 → CLI picker; explicit names also work; null → CLI default.
+  gemini_cli_model: auto-gemini-3
+
+conversation:
+  history_max_chars: 8000
