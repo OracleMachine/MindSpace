@@ -26,17 +26,6 @@ def _extract_title(markdown: str) -> str | None:
     return None
 
 
-def _strip_cli_preamble(lines: list[str], heading_prefix: str) -> str:
-    """Slice CLI output from the first line starting with `heading_prefix`.
-
-    The Gemini CLI interleaves retry/backoff noise with the final report;
-    this drops everything before the expected H1 so only the report is kept.
-    Falls back to the full joined output if the heading is never seen.
-    """
-    for i, line in enumerate(lines):
-        if line.lstrip().startswith(heading_prefix):
-            return "\n".join(lines[i:]).strip()
-    return "\n".join(lines).strip()
 from agent import MindSpaceAgent
 from tools import MindSpaceTools
 from manager import KnowledgeBaseManager
@@ -124,34 +113,29 @@ class MindSpaceBot(discord.Client):
     async def _render_stream_to_channel(self, channel, header: str, handle) -> str:
         """Render a CLI stream handle to a single live-updating Discord message.
 
-        `handle` is any async-iterable that yields already-cleaned text lines
-        (e.g. `agent.CliStream`). This method is pure UI — it knows nothing
-        about subprocesses, env, or the CLI itself. Returns the full joined
-        output for the caller to post-process / save.
+        `handle` is any async-iterable that yields clean assistant content chunks.
+        This method is pure UI — it knows nothing about subprocesses, env, or the
+        CLI itself. Returns the full joined output.
         """
         status_msg = await channel.send(f"{header}\n```\n(initializing...)\n```")
-        all_lines: list[str] = []
-        last_edit = asyncio.get_event_loop().time()
+        all_parts: list[str] = []
 
-        async for line in handle:
-            all_lines.append(line)
-            now = asyncio.get_event_loop().time()
-            if now - last_edit >= 2.0:
-                content = "\n".join(all_lines)
-                if len(content) > 1800:
-                    content = "..." + content[-1797:]
-                try:
-                    await status_msg.edit(content=f"{header}\n```\n{content}\n```")
-                except discord.HTTPException:
-                    pass
-                last_edit = now
+        async for chunk in handle:
+            all_parts.append(chunk)
+            content = "".join(all_parts)
+            if len(content) > 1800:
+                content = "..." + content[-1797:]
+            try:
+                await status_msg.edit(content=f"{header}\n```\n{content}\n```")
+            except discord.HTTPException:
+                pass
 
         try:
             await status_msg.edit(content="✅ Task complete.")
         except discord.HTTPException:
             pass
 
-        return "\n".join(all_lines)
+        return "".join(all_parts).strip()
 
     async def handle_organize(self, channel, guild):
         """Organize the channel folder via Gemini CLI with live progress streaming."""
@@ -203,10 +187,10 @@ WHEN DONE, output ONLY this markdown report (no other prose):
             prompt=prompt,
             cwd=channel_path,
         )
-        raw = await self._render_stream_to_channel(
+        await self._render_stream_to_channel(
             channel, header="🔄 Gemini CLI organizing...", handle=handle,
         )
-        report = _strip_cli_preamble(raw.splitlines(), "## Organize Report")
+        report = handle.get_full_response()
 
         commit_msg = await asyncio.to_thread(
             self.agent.generate_commit_message,
@@ -253,7 +237,7 @@ WHEN DONE, output ONLY this markdown report (no other prose):
         updates edit the deferred "thinking..." message in place — no
         follow-ups are sent. Text-command fallback uses channel.send.
 
-        Streams CLI output via agent.cli_brain.stream() — each line is
+        Streams CLI output via agent.cli_brain.stream() — each chunk is
         logged to console as it arrives and the event loop stays responsive.
         """
         # Status updater — edits the deferred interaction response when present,
@@ -332,29 +316,17 @@ OUTPUT FORMAT (markdown, no extra prose outside this structure):
         # Stream CLI output to the deferred interaction's "thinking..." message,
         # editing it every ~2s with the latest tail so the user sees progress
         # without any follow-up spam. Console still gets every line.
-        lines: list[str] = []
         header = f"🔬 Researching: **{topic}**"
-        last_edit = asyncio.get_event_loop().time()
-        async for line in handle:
-            logger.debug(f"CLI | {line}")
-            lines.append(line)
-            now = asyncio.get_event_loop().time()
-            if now - last_edit >= 2.0:
-                tail = "\n".join(lines[-15:])
-                if len(tail) > 1700:
-                    tail = "..." + tail[-1697:]
-                await status(f"{header}\n```\n{tail}\n```")
-                last_edit = now
+        await self._render_stream_to_channel(channel, header=header, handle=handle)
 
-        logger.info(f"RESEARCH: CLI exited — returncode={handle.returncode}, lines={len(lines)}")
+        logger.info(f"RESEARCH: CLI exited — returncode={handle.returncode}")
 
         if handle.returncode != 0:
             logger.error(f"RESEARCH: CLI failed with non-zero exit {handle.returncode}")
-            tail = "\n".join(lines[-20:])
-            await status(f"❌ Gemini CLI exited {handle.returncode}. Last lines:\n```\n{tail[:1500]}\n```")
+            await status(f"❌ Gemini CLI exited {handle.returncode}.")
             return
 
-        report = _strip_cli_preamble(lines, "# Research:")
+        report = handle.get_full_response()
         if not report:
             logger.error("RESEARCH: CLI produced empty output")
             await status("⚠️ Research produced no output.")
@@ -434,10 +406,10 @@ OUTPUT FORMAT (markdown):
             prompt=prompt,
             cwd=config.CHANNELS_PATH,
         )
-        raw = await self._render_stream_to_channel(
+        await self._render_stream_to_channel(
             channel, header=f"🌐 Gemini CLI synthesizing: {query}...", handle=handle,
         )
-        report = _strip_cli_preamble(raw.splitlines(), "# Omni:")
+        report = handle.get_full_response()
 
         if not report.strip():
             await channel.send("⚠️ Omni synthesis produced no output.")

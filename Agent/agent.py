@@ -128,11 +128,9 @@ class GeminiCLIBrain(LLMBrain):
 
     def build_args(self) -> list[str]:
         """Return subprocess args. Prompt is passed via stdin to avoid OS arg length limits."""
-        args = ["gemini"]
-        if self.yolo:
-            args.append("-y")
+        args = ["gemini", "-y", "-o", "stream-json"]
         if self.model:
-            args += ["-m", self.model]
+            args.extend(["-m", self.model])
         return args
 
     def _build_prompt(self, instruction: str, context: str = None,
@@ -148,9 +146,6 @@ class GeminiCLIBrain(LLMBrain):
         parts.append(f"[User]\n{instruction}")
         return "\n\n".join(parts)
 
-    # ANSI escape stripper for CLI stdout (Gemini CLI emits colored progress).
-    _ANSI_RE = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
-
     def run_command(self, instruction: str, context: str = None) -> str:
         prompt = self._build_prompt(instruction, context)
         logger.debug(f"GeminiCLI.run_command prompt ({len(prompt)} chars):\n{prompt}")
@@ -160,23 +155,17 @@ class GeminiCLIBrain(LLMBrain):
             capture_output=True, text=True, timeout=300,
             env=self.env,
         )
-        return result.stdout.strip() or result.stderr.strip()
+        parts = []
+        for line in result.stdout.splitlines():
+            try:
+                data = json.loads(line)
+                if data.get("role") == "assistant":
+                    parts.append(data.get("content", ""))
+            except: continue
+        return "".join(parts).strip()
 
     async def stream(self, prompt: str, cwd: str) -> "CliStream":
-        """Spawn the CLI and return an async-iterable handle.
-
-        Env (GEMINI_CLI_HOME) and args (yolo/model) are always injected —
-        callers don't need to know the CLI's invocation details. The prompt
-        is piped via stdin (avoids OS arg length limits). `cwd` defines the
-        CLI's workspace root — scope carefully to restrict file access.
-
-        Usage:
-            handle = await brain.stream(prompt, cwd=channel_path)
-            async for line in handle:
-                ...   # ANSI-stripped, empty lines skipped
-            if handle.returncode != 0:
-                ...   # inspect failure
-        """
+        """Spawn the CLI and return an async-iterable handle."""
         args = self.build_args()
         logger.debug(
             f"GeminiCLI.stream args={args} cwd={cwd} prompt ({len(prompt)} chars):\n{prompt}"
@@ -185,14 +174,14 @@ class GeminiCLIBrain(LLMBrain):
             *args,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
+            stderr=asyncio.subprocess.PIPE,
             cwd=cwd,
             env=self.env,
         )
         proc.stdin.write(prompt.encode())
         await proc.stdin.drain()
         proc.stdin.close()
-        return CliStream(proc, self._ANSI_RE)
+        return CliStream(proc)
 
     def chat(self, system_ctx: str, history: list, message: str, tools: list = None) -> str:
         # tools ignored — Gemini CLI manages its own tool loop internally
@@ -200,27 +189,56 @@ class GeminiCLIBrain(LLMBrain):
         return self.run_command(prompt)
 
 
+import json
+
 class CliStream:
     """Async-iterable wrapper around a running Gemini CLI subprocess.
-    Yields ANSI-stripped, non-empty lines. `returncode` is populated once
-    iteration completes (or is aborted)."""
+    Yields assistant content chunks as they arrive."""
 
-    def __init__(self, proc, ansi_re):
+    def __init__(self, proc):
         self._proc = proc
-        self._ansi = ansi_re
         self.returncode: int | None = None
+        self.result: dict | None = None
+        self._parts: list[str] = []
+
+    def get_full_response(self) -> str:
+        """Return the clean, concatenated assistant response."""
+        return "".join(self._parts).strip()
 
     def __aiter__(self):
         return self._iter()
 
+    async def _read_stderr(self):
+        """Read and log stderr in the background to prevent buffer deadlocks."""
+        try:
+            async for raw in self._proc.stderr:
+                line = raw.decode(errors="replace").strip()
+                if line:
+                    logger.debug(f"CLI STDERR | {line}")
+        except Exception:
+            pass
+
     async def _iter(self):
+        stderr_task = asyncio.create_task(self._read_stderr())
         try:
             async for raw in self._proc.stdout:
-                line = self._ansi.sub('', raw.decode(errors="replace").rstrip())
-                if line:
-                    yield line
+                try:
+                    data = json.loads(raw.decode(errors="replace"))
+                    if data.get("role") == "assistant":
+                        content = data.get("content", "")
+                        if content:
+                            self._parts.append(content)
+                            yield content
+                    if data.get("type") == "result":
+                        self.result = data
+                except: continue
         finally:
             self.returncode = await self._proc.wait()
+            stderr_task.cancel()
+            try:
+                await stderr_task
+            except asyncio.CancelledError:
+                pass
 
 
 class MindSpaceAgent:
