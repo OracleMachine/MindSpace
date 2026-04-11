@@ -1,0 +1,107 @@
+"""MCP integration bridge.
+
+Two entry points, one config source (`config.MCP_SERVERS`):
+
+- `sync_cli_settings()` renders `mcpServers` into the Gemini CLI's
+  settings.json so the command brain (!organize, !research, !omni)
+  picks them up via the rerooted GEMINI_CLI_HOME.
+
+- `MCPSessionPool` opens live `mcp.ClientSession`s over streamable HTTP
+  and exposes them as `.sessions` — passed directly into
+  `google.genai` tools so the dialogue brain (passive chat) can invoke
+  MCP tools during automatic function calling.
+"""
+import asyncio
+import json
+import os
+from contextlib import AsyncExitStack
+from typing import Optional
+
+import config
+from logger import logger
+
+
+def sync_cli_settings() -> None:
+    if not config.MCP_SERVERS:
+        logger.debug("MCP: no servers configured, skipping settings.json sync")
+        return
+
+    settings_path = os.path.join(config.GEMINI_CLI_HOME_DIR, ".gemini", "settings.json")
+    os.makedirs(os.path.dirname(settings_path), exist_ok=True)
+
+    existing: dict = {}
+    if os.path.exists(settings_path):
+        try:
+            with open(settings_path, "r") as f:
+                existing = json.load(f)
+        except Exception as e:
+            logger.warning(f"MCP: existing {settings_path} unparseable, rewriting: {e}")
+
+    existing["mcpServers"] = config.MCP_SERVERS
+
+    with open(settings_path, "w") as f:
+        json.dump(existing, f, indent=2)
+
+    logger.info(f"MCP: synced {len(config.MCP_SERVERS)} server(s) into {settings_path}")
+
+
+class MCPSessionPool:
+    """Live pool of `mcp.ClientSession`s, opened over streamable HTTP.
+
+    Lifetime is tied to the bot: `connect()` in setup_hook, `close()` in
+    the bot's `close()`. `sessions` is a plain list of ClientSession
+    objects that can be appended into `types.GenerateContentConfig(tools=...)`
+    — the google-genai SDK handles MCP tool discovery and dispatch natively.
+    """
+
+    def __init__(self, servers: dict):
+        self.servers = servers or {}
+        self.sessions: list = []
+        self._exit_stack: Optional[AsyncExitStack] = None
+
+    async def connect(self) -> None:
+        if not self.servers:
+            logger.debug("MCP: no servers configured, pool stays empty")
+            return
+        try:
+            from mcp import ClientSession
+            from mcp.client.streamable_http import streamablehttp_client
+        except ImportError:
+            logger.warning("MCP: 'mcp' package not installed; pool disabled")
+            return
+
+        self._exit_stack = AsyncExitStack()
+        await self._exit_stack.__aenter__()
+
+        for name, cfg in self.servers.items():
+            url = cfg.get("url")
+            if not url:
+                logger.warning(f"MCP: server '{name}' has no url, skipping")
+                continue
+            headers = cfg.get("headers", {})
+            try:
+                transport = await self._exit_stack.enter_async_context(
+                    streamablehttp_client(url, headers=headers)
+                )
+                read_stream, write_stream, _ = transport
+                session = await self._exit_stack.enter_async_context(
+                    ClientSession(read_stream, write_stream)
+                )
+                await session.initialize()
+                self.sessions.append(session)
+                logger.info(f"MCP: connected → {name} ({url})")
+            except (Exception, asyncio.CancelledError) as e:
+                # CancelledError propagates from anyio cancel scopes when the
+                # underlying HTTP stream errors out (e.g., connection refused).
+                # Treat it like any other connect failure — isolate to this
+                # server so the rest of the pool still comes up.
+                logger.warning(f"MCP: failed to connect {name}: {e!r}")
+
+    async def close(self) -> None:
+        if self._exit_stack is not None:
+            try:
+                await self._exit_stack.__aexit__(None, None, None)
+            except Exception as e:
+                logger.warning(f"MCP: error closing session pool: {e}")
+        self._exit_stack = None
+        self.sessions = []

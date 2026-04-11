@@ -44,6 +44,20 @@ GEMINI_CLI_MODEL = _brains.get("gemini_cli_model", "auto-gemini-3")
 _conv = _cfg.get("conversation", {})
 CONVERSATION_HISTORY_MAX_CHARS = _conv.get("history_max_chars", 8000)
 
+# --- MCP ---
+def _expand_env(obj):
+    """Recursively substitute ${VAR} / $VAR references in strings from os.environ."""
+    if isinstance(obj, str):
+        return os.path.expandvars(obj)
+    if isinstance(obj, dict):
+        return {k: _expand_env(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_expand_env(v) for v in obj]
+    return obj
+
+_mcp = _cfg.get("mcp", {})
+MCP_SERVERS: dict = _expand_env(_mcp.get("servers", {}))
+
 # --- Derived paths ---
 OPENVIKING_DATA_PATH = os.path.join(BASE_STORAGE_PATH, "openviking")
 CHANNELS_PATH = os.path.join(BASE_STORAGE_PATH, "Channels")

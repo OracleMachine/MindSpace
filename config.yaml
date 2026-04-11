@@ -24,3 +24,10 @@ brains:
 
 conversation:
   history_max_chars: 8000
+
+mcp:
+  servers:
+    wisburg-mcp-server:
+      url: https://mcp.wisburg.com/mcp
+      headers:
+        Authorization: Bearer ${WISBURG_MCP_TOKEN}

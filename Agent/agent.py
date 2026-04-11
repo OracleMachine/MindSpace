@@ -21,6 +21,19 @@ class LLMBrain(ABC):
         """Multi-turn dialogue with persistent system context and conversation history."""
         pass
 
+    async def achat(self, system_ctx: str, history: list, message: str,
+                    tools: list = None, mcp_sessions: list = None) -> str:
+        """Async chat entry point. Default: wrap sync `chat` via asyncio.to_thread.
+
+        Subclasses override this to get native async + MCP tool support.
+        """
+        if mcp_sessions:
+            logger.warning(
+                f"{type(self).__name__}: mcp_sessions provided but brain has no "
+                "native MCP support; ignoring"
+            )
+        return await asyncio.to_thread(self.chat, system_ctx, history, message, tools)
+
 class GoogleGenAIBrain(LLMBrain):
     def __init__(self, model=config.GEMINI_SDK_MODEL):
         self.model = model
@@ -64,6 +77,44 @@ class GoogleGenAIBrain(LLMBrain):
             
             cfg = types.GenerateContentConfig(**kwargs) if kwargs else None
             response = self.client.models.generate_content(
+                model=self.model,
+                contents=contents,
+                config=cfg
+            )
+            return response.text.strip()
+        except Exception as e:
+            raise Exception(f"Google GenAI SDK Error: {str(e)}")
+
+    async def achat(self, system_ctx: str, history: list, message: str,
+                    tools: list = None, mcp_sessions: list = None) -> str:
+        """Async multi-turn call. MCP sessions are passed straight through —
+        google-genai handles tool discovery + dispatch on ClientSession objects."""
+        logger.debug(
+            f"GoogleGenAI.achat system_ctx ({len(system_ctx or '')} chars):\n{system_ctx}\n"
+            f"--- history ({len(history)} turns) ---\n"
+            + "\n".join(f"[{r}] {c}" for r, c in history)
+            + f"\n--- message ---\n{message}"
+        )
+        contents = []
+        for role, content in history:
+            gemini_role = "model" if role == "assistant" else "user"
+            contents.append({"role": gemini_role, "parts": [{"text": content}]})
+        contents.append({"role": "user", "parts": [{"text": message}]})
+
+        combined_tools = list(tools or [])
+        if mcp_sessions:
+            combined_tools.extend(mcp_sessions)
+
+        try:
+            kwargs = {}
+            if system_ctx:
+                kwargs["system_instruction"] = system_ctx
+            if combined_tools:
+                kwargs["tools"] = combined_tools
+                kwargs["automatic_function_calling"] = types.AutomaticFunctionCallingConfig(disable=False)
+
+            cfg = types.GenerateContentConfig(**kwargs) if kwargs else None
+            response = await self.client.aio.models.generate_content(
                 model=self.model,
                 contents=contents,
                 config=cfg
@@ -266,7 +317,7 @@ class MindSpaceAgent:
         if hasattr(self.brain, 'close'):
             self.brain.close()
 
-    def engage_dialogue(self, user_message, channel_name, history: str = "", stream_content="", tools: list = None):
+    async def engage_dialogue(self, user_message, channel_name, history: str = "", stream_content="", tools: list = None, mcp_sessions: list = None):
         system_parts = [f"You are a knowledge agent in Discord channel #{channel_name}."]
         if history:
             system_parts.append(
@@ -288,7 +339,7 @@ class MindSpaceAgent:
         )
         system_ctx = "\n\n".join(system_parts)
 
-        response = self.brain.chat(system_ctx, [], user_message, tools=tools)
+        response = await self.brain.achat(system_ctx, [], user_message, tools=tools, mcp_sessions=mcp_sessions)
         reply = response
         thought = None
         if "THOUGHT:" in response:

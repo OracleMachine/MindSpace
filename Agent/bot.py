@@ -30,6 +30,7 @@ from agent import MindSpaceAgent
 from tools import MindSpaceTools
 from manager import KnowledgeBaseManager
 from logger import logger
+import mcp_bridge
 
 class MindSpaceBot(discord.Client):
     def __init__(self, *args, **kwargs):
@@ -38,6 +39,7 @@ class MindSpaceBot(discord.Client):
         self.agent = None  # initialized in setup_hook (inside the event loop)
         self.kb = None     # initialized in on_ready (after guild info available)
         self.tools = None
+        self.mcp_pool = None  # initialized in setup_hook; drains into dialogue brain tools
         self.tree = app_commands.CommandTree(self)
 
     async def setup_hook(self):
@@ -45,6 +47,9 @@ class MindSpaceBot(discord.Client):
         Runs inside the event loop — genai.Client binds to the correct loop here.
         """
         self.agent = MindSpaceAgent()
+        mcp_bridge.sync_cli_settings()
+        self.mcp_pool = mcp_bridge.MCPSessionPool(config.MCP_SERVERS)
+        await self.mcp_pool.connect()
         self.log_task = self.loop.create_task(logger.process_log_queue())
 
         @self.tree.command(name="organize", description="Re-sync and organize the current channel's knowledge base folder.")
@@ -477,6 +482,9 @@ OUTPUT FORMAT (markdown):
             except asyncio.CancelledError:
                 pass
 
+        if getattr(self, "mcp_pool", None):
+            await self.mcp_pool.close()
+
         if self.agent:
             self.agent.close()
         await super().close()
@@ -602,13 +610,13 @@ OUTPUT FORMAT (markdown):
         else:
             available_tools = self.tools.get_tools(channel_name)
 
-            reply, thought = await asyncio.to_thread(
-                self.agent.engage_dialogue,
+            reply, thought = await self.agent.engage_dialogue(
                 message.content,
                 channel_name,
                 history=self.kb.get_history(channel_name),
                 stream_content=self.kb.get_stream_content(channel_name),
-                tools=available_tools
+                tools=available_tools,
+                mcp_sessions=self.mcp_pool.sessions if self.mcp_pool else None,
             )
 
             self.kb.append_history(channel_name, message.author.display_name, message.content)
