@@ -6,9 +6,8 @@ class MindSpaceTools:
     """
     A collection of tools available to the MindSpace Agent for autonomous information retrieval.
     """
-    def __init__(self, kb, on_propose_update=None):
+    def __init__(self, kb):
         self.kb = kb
-        self.on_propose_update = on_propose_update
 
     def _generate_tree(self, startpath: str) -> str:
         """Helper to generate a ASCII tree representation of a directory."""
@@ -116,7 +115,7 @@ class MindSpaceTools:
             logger.error(f"Tool Error: list_global_files failed: {e}")
             return f"Error listing global files: {str(e)}"
 
-    def get_tools(self, channel_name: str):
+    def get_tools(self, channel_name: str, on_propose_update=None):
         """
         Returns a list of tools bound to the specific channel.
         Uses explicit wrapper functions to ensure clean signatures and metadata for the SDK.
@@ -156,8 +155,8 @@ class MindSpaceTools:
 
         async def propose_update(path: str, instruction: str, rationale: str) -> str:
             """
-            Propose a targeted update to an existing Knowledge Base file.
-            Use this when you identify an insight that belongs in a structured research file 
+            Propose a targeted update to a Knowledge Base file (existing or new).
+            Use this when you identify an insight that belongs in a structured research file
             rather than just the stream of consciousness.
             Args:
                 path: The relative path to the file under the channel folder (e.g., 'Analyses/model.md')
@@ -165,11 +164,10 @@ class MindSpaceTools:
                 rationale: Why this change is being proposed (visible to the human reviewer).
             """
             logger.debug(f"Tool Execution: propose_update for #{channel_name} path={path}: {rationale}")
-            if not self.on_propose_update:
+            if not on_propose_update:
                 return "Error: propose_update is not configured on this agent."
             try:
-                # This will be handled as an async tool call by the SDK.
-                return await self.on_propose_update(channel_name, path, instruction, rationale)
+                return await on_propose_update(channel_name, path, instruction, rationale)
             except Exception as e:
                 logger.error(f"Tool Error: propose_update failed: {e}")
                 return f"Error proposing update: {str(e)}"

@@ -39,6 +39,9 @@ class ProposalView(discord.ui.View):
         self.bot = bot
         self.proposal_id = proposal_id
 
+    async def on_timeout(self):
+        self.bot._pending_proposals.pop(self.proposal_id, None)
+
     @discord.ui.button(label="Apply", style=discord.ButtonStyle.green, emoji="✅")
     async def apply(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer()
@@ -218,7 +221,7 @@ class MindSpaceBot(discord.Client):
 
         if self.kb is None:
             self.kb = KnowledgeBaseManager(guild.name)
-            self.tools = MindSpaceTools(self.kb, on_propose_update=self.handle_propose_update)
+            self.tools = MindSpaceTools(self.kb)
             logger.info(f"Initialized KB and Tools for server: {guild.name}")
 
         # Sync Slash Commands
@@ -583,44 +586,38 @@ OUTPUT FORMAT (markdown):
         if os.path.commonpath([abs_path, channels_abs]) != channels_abs:
             return "Error: Security violation — cannot edit files outside the knowledge base."
 
-        # 1. Read existing content
         existing_content = ""
         if os.path.exists(abs_path):
-            try:
-                with open(abs_path, "r") as f:
-                    existing_content = f.read()
-            except Exception as e:
-                return f"Error reading file: {e}"
+            with open(abs_path, "r") as f:
+                existing_content = f.read()
 
-        # 2. Isolated Rewrite Agent (Stateless)
+        # Isolated Rewrite Agent (Stateless)
         # This keeps the Dialogue History lean and prevents context bloat.
-        prompt = f"""
-Modify the following Knowledge Base file based on this user instruction:
-INSTRUCTION: {instruction}
-
-ORIGINAL FILE CONTENT:
----
-{existing_content or "(empty file)"}
----
-
-TASK:
-- Apply the instruction surgically and accurately.
-- Maintain existing tone, formatting, and markdown structure.
-- Output ONLY the complete, rewritten markdown document.
-- NO commentary, NO conversational filler.
-"""
+        if existing_content:
+            prompt = (
+                f"Modify the following Knowledge Base file based on this instruction:\n"
+                f"INSTRUCTION: {instruction}\n\n"
+                f"ORIGINAL FILE CONTENT:\n---\n{existing_content}\n---\n\n"
+                f"Apply the instruction surgically. Maintain existing tone and formatting.\n"
+                f"Output ONLY the complete, rewritten markdown document — no commentary."
+            )
+        else:
+            prompt = (
+                f"Create a new Knowledge Base file based on this instruction:\n"
+                f"INSTRUCTION: {instruction}\n\n"
+                f"The file will be saved as: {rel_path}\n"
+                f"Output ONLY the complete markdown document — no commentary."
+            )
         logger.info(f"PROPOSAL: Generating rewrite for {rel_path} in #{channel_name}...")
         proposed_content = await self.agent.brain.run_command_async(prompt)
 
         if not proposed_content.strip():
             return "Error: The rewrite agent returned empty content."
 
-        # 3. Generate the Diff (in memory)
         diff_text = _render_diff(existing_content, proposed_content, rel_path)
         if not diff_text.strip():
             return f"The file `{rel_path}` already appears to satisfy the instruction."
 
-        # 4. Store in memory for review
         proposal_id = uuid.uuid4().hex[:8]
         self._pending_proposals[proposal_id] = {
             "channel_name": channel_name,
@@ -816,7 +813,7 @@ TASK:
 
         # --- 3. PASSIVE DIALOGUE (thought recording + tool-augmented replies) ---
         else:
-            available_tools = self.tools.get_tools(channel_name)
+            available_tools = self.tools.get_tools(channel_name, on_propose_update=self.handle_propose_update)
 
             status_msg = await message.channel.send("🧠 **Thinking...**")
 
