@@ -146,6 +146,8 @@ class MindSpaceTools:
             logger.debug(f"Tool Execution: record_thought for #{channel_name}: {summary}")
             try:
                 self.kb.append_thought(channel_name, summary)
+                stream_rel = os.path.join("Channels", channel_name, "stream_of_conscious.md")
+                self.kb.index_files([stream_rel])
                 return f"Thought recorded: {summary}"
             except Exception as e:
                 logger.error(f"Tool Error: record_thought failed: {e}")
