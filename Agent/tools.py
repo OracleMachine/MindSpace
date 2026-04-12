@@ -1,4 +1,5 @@
 import os
+import uuid
 import logging
 from logger import logger
 
@@ -6,8 +7,11 @@ class MindSpaceTools:
     """
     A collection of tools available to the MindSpace Agent for autonomous information retrieval.
     """
-    def __init__(self, kb):
+    def __init__(self, kb, on_propose_update=None):
         self.kb = kb
+        self.on_propose_update = on_propose_update
+        self.pending_proposals: dict[str, dict] = {}
+        self._proposals_this_turn: list[str] = []
 
     def _generate_tree(self, startpath: str) -> str:
         """Helper to generate a ASCII tree representation of a directory."""
@@ -153,10 +157,31 @@ class MindSpaceTools:
                 logger.error(f"Tool Error: record_thought failed: {e}")
                 return f"Error recording thought: {str(e)}"
 
+        async def propose_update(path: str, instruction: str, rationale: str) -> str:
+            """
+            Propose a targeted update to an existing Knowledge Base file.
+            Use this when you identify an insight that belongs in a structured research file 
+            rather than just the stream of consciousness.
+            Args:
+                path: The relative path to the file under the channel folder (e.g., 'Analyses/model.md')
+                instruction: Clear, imperative instructions for the change (e.g., 'Add a section about X after Y').
+                rationale: Why this change is being proposed (visible to the human reviewer).
+            """
+            logger.debug(f"Tool Execution: propose_update for #{channel_name} path={path}: {rationale}")
+            if not self.on_propose_update:
+                return "Error: propose_update is not configured on this agent."
+            try:
+                # This will be handled as an async tool call by the SDK.
+                return await self.on_propose_update(channel_name, path, instruction, rationale)
+            except Exception as e:
+                logger.error(f"Tool Error: propose_update failed: {e}")
+                return f"Error proposing update: {str(e)}"
+
         return [
             list_channel_files,
             search_channel_knowledge_base,
             self.search_global_knowledge_base,
             self.list_global_files,
             record_thought,
+            propose_update,
         ]

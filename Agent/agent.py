@@ -322,6 +322,10 @@ class MindSpaceAgent:
             "If the user's message contains a valuable insight, analysis, or conclusion worth "
             "preserving, call `record_thought` with a concise summary. Do this silently — "
             "do not mention it in your reply.\n\n"
+            "If an insight specifically belongs in an existing structured research file or article "
+            "(e.g., updating a model, adding a variable to an analysis), use `propose_update`. "
+            "This will present a Git-style diff to the user for approval. Use this for "
+            "maintaining high-quality structured knowledge.\n\n"
             "Reply naturally to the user."
         )
         system_ctx = "\n\n".join(system_parts)

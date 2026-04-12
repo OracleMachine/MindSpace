@@ -2,12 +2,127 @@ import discord
 import os
 import re
 import datetime
+import difflib
 import config
 import asyncio
 import functools
 import git
 from discord import app_commands
 
+
+def _render_diff(existing: str, proposed: str, file_path: str) -> str:
+    if not existing:
+        diff_lines = [f"+{line}" for line in proposed.splitlines()]
+        return f"--- /dev/null\n+++ b/{file_path}\n" + "\n".join(diff_lines)
+    return "\n".join(difflib.unified_diff(
+        existing.splitlines(), proposed.splitlines(),
+        fromfile=f"a/{file_path}", tofile=f"b/{file_path}", lineterm=""
+    ))
+
+
+def _format_proposal_message(rel_path: str, rationale: str, diff_text: str) -> str:
+    if len(diff_text) > 1500:
+        diff_text = diff_text[:1497] + "..."
+    return (
+        f"\U0001f4a1 **KB Update Proposal for `{rel_path}`**\n"
+        f"> {rationale}\n\n"
+        f"```diff\n{diff_text}\n```"
+    )
+
+
+class ProposalView(discord.ui.View):
+    def __init__(self, bot, proposal_id, timeout=3600):
+        super().__init__(timeout=timeout)
+        self.bot = bot
+        self.proposal_id = proposal_id
+
+    @discord.ui.button(label="Apply", style=discord.ButtonStyle.green, emoji="✅")
+    async def apply(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer()
+        proposal = self.bot.tools.pending_proposals.pop(self.proposal_id, None)
+        if not proposal:
+            await interaction.edit_original_response(content="⚠️ Proposal expired or not found.", view=None)
+            return
+        
+        abs_path = os.path.join(
+            self.bot.kb.channels_path, proposal["channel_name"], proposal["rel_path"]
+        )
+        # Write to disk only now
+        self.bot.kb.write_file(abs_path, proposal["proposed_content"])
+        
+        # Index and commit
+        commit_msg = await self.bot.agent.generate_commit_message(
+            f"KB update: {proposal['rel_path']} — {proposal['rationale']}"
+        )
+        await asyncio.to_thread(self.bot.kb.save_state, commit_msg)
+        
+        await interaction.edit_original_response(
+            content=f"✅ **Applied proposal:** {proposal['rationale']}\n*(Written, indexed, and committed)*", view=None
+        )
+        logger.info(f"PROPOSAL: Applied change to {proposal['rel_path']}", interaction.guild)
+
+    @discord.ui.button(label="Discard", style=discord.ButtonStyle.red, emoji="🗑️")
+    async def discard(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer()
+        proposal = self.bot.tools.pending_proposals.pop(self.proposal_id, None)
+        rationale = proposal["rationale"] if proposal else "unknown"
+        await interaction.edit_original_response(content=f"🗑️ **Discarded proposal:** {rationale}", view=None)
+
+    @discord.ui.button(label="Refine", style=discord.ButtonStyle.blurple, emoji="✍️")
+    async def refine(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(RefineModal(self))
+
+
+class RefineModal(discord.ui.Modal, title="Refine Proposal"):
+    feedback = discord.ui.TextInput(
+        label="How should this be changed?",
+        style=discord.TextStyle.paragraph,
+        placeholder='e.g., "Make it shorter", "Add more details about X"',
+        required=True,
+    )
+
+    def __init__(self, view: ProposalView):
+        super().__init__()
+        self.proposal_view = view
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+        proposal = self.proposal_view.bot.tools.pending_proposals.get(self.proposal_view.proposal_id)
+        if not proposal:
+            return
+            
+        await interaction.edit_original_response(
+            content=f"⏳ **Refining proposal based on feedback:** {self.feedback.value}...", view=None
+        )
+        
+        # Isolated Refinement Agent
+        prompt = f"""
+Modify the following Knowledge Base file based on this user feedback:
+FEEDBACK: {self.feedback.value}
+
+ORIGINAL FILE CONTENT:
+---
+{proposal['existing_content'] or "(empty file)"}
+---
+
+PREVIOUS PROPOSED VERSION:
+---
+{proposal['proposed_content']}
+---
+
+TASK:
+- Incorporate the feedback into the proposed version.
+- Maintain existing tone, formatting, and markdown structure.
+- Output ONLY the complete, revised markdown document.
+- NO commentary.
+"""
+        revised = await self.proposal_view.bot.agent.brain.run_command_async(prompt)
+        
+        proposal["proposed_content"] = revised
+        diff_text = _render_diff(proposal["existing_content"], revised, proposal["rel_path"])
+        body = _format_proposal_message(proposal["rel_path"], proposal["rationale"], diff_text)
+        view = ProposalView(self.proposal_view.bot, self.proposal_view.proposal_id)
+        await interaction.edit_original_response(content=body, view=view)
 
 def _slugify_subject(text: str, max_len: int = 50) -> str:
     """Filesystem-safe kebab-case slug from free text, used as the SUBJECT
@@ -40,6 +155,7 @@ class MindSpaceBot(discord.Client):
         self.kb = None     # initialized in on_ready (after guild info available)
         self.tools = None
         self.mcp_pool = None  # initialized in setup_hook; drains into dialogue brain tools
+        self._pending_proposals: dict[str, dict] = {}
         self.tree = app_commands.CommandTree(self)
         
         # Discord Log Queue (Async sink for the sync logger)
@@ -96,7 +212,7 @@ class MindSpaceBot(discord.Client):
 
         if self.kb is None:
             self.kb = KnowledgeBaseManager(guild.name)
-            self.tools = MindSpaceTools(self.kb)
+            self.tools = MindSpaceTools(self.kb, on_propose_update=self.handle_propose_update)
             logger.info(f"Initialized KB and Tools for server: {guild.name}")
 
         # Sync Slash Commands
@@ -450,6 +566,69 @@ OUTPUT FORMAT (markdown):
         await channel.send(f"✅ Omni search complete.", file=discord.File(file_path))
         logger.info(f"**OMNI**: {query}", guild)
 
+    async def handle_propose_update(self, channel_name: str, rel_path: str, instruction: str, rationale: str):
+        """Callback triggered by the propose_update tool. 
+        Uses an isolated LLM call to generate proposed content in memory."""
+        channel_path = self.kb.get_channel_path(channel_name)
+        abs_path = os.path.abspath(os.path.join(channel_path, rel_path))
+
+        # Security check: ensure path is under Channels/
+        channels_abs = os.path.abspath(config.CHANNELS_PATH)
+        if os.path.commonpath([abs_path, channels_abs]) != channels_abs:
+            return "Error: Security violation — cannot edit files outside the knowledge base."
+
+        # 1. Read existing content
+        existing_content = ""
+        if os.path.exists(abs_path):
+            try:
+                with open(abs_path, "r") as f:
+                    existing_content = f.read()
+            except Exception as e:
+                return f"Error reading file: {e}"
+
+        # 2. Isolated Rewrite Agent (Stateless)
+        # This keeps the Dialogue History lean and prevents context bloat.
+        prompt = f"""
+Modify the following Knowledge Base file based on this user instruction:
+INSTRUCTION: {instruction}
+
+ORIGINAL FILE CONTENT:
+---
+{existing_content or "(empty file)"}
+---
+
+TASK:
+- Apply the instruction surgically and accurately.
+- Maintain existing tone, formatting, and markdown structure.
+- Output ONLY the complete, rewritten markdown document.
+- NO commentary, NO conversational filler.
+"""
+        logger.info(f"PROPOSAL: Generating rewrite for {rel_path} in #{channel_name}...")
+        proposed_content = await self.agent.brain.run_command_async(prompt)
+
+        if not proposed_content.strip():
+            return "Error: The rewrite agent returned empty content."
+
+        # 3. Generate the Diff (in memory)
+        diff_text = _render_diff(existing_content, proposed_content, rel_path)
+        if not diff_text.strip():
+            return f"The file `{rel_path}` already appears to satisfy the instruction."
+
+        # 4. Store in memory for review
+        import uuid
+        proposal_id = uuid.uuid4().hex[:8]
+        self.tools.pending_proposals[proposal_id] = {
+            "channel_name": channel_name,
+            "rel_path": rel_path,
+            "existing_content": existing_content,
+            "proposed_content": proposed_content,
+            "rationale": rationale,
+            "instruction": instruction
+        }
+        self.tools._proposals_this_turn.append(proposal_id)
+
+        return f"Proposal for `{rel_path}` generated and queued for your review."
+
     # --- HELPERS ---
 
     async def _sync_kb_channels(self, guild):
@@ -647,6 +826,8 @@ OUTPUT FORMAT (markdown):
                 async def inner(*args, **kwargs):
                     arg_parts = [repr(a)[:60] for a in args] + [f"{k}={repr(v)[:60]}" for k, v in kwargs.items()]
                     await on_progress(f"🔧 {fn.__module__}.{fn.__name__}({', '.join(arg_parts)})")
+                    if inspect.iscoroutinefunction(fn):
+                        return await fn(*args, **kwargs)
                     return await asyncio.to_thread(fn, *args, **kwargs)
                 return inner
 
@@ -686,6 +867,24 @@ OUTPUT FORMAT (markdown):
             self.kb.append_history(channel_name, "assistant", reply)
 
             await self.send_message_safe(message.channel, reply)
+
+            # --- SEND PENDING PROPOSALS ---
+            # We process any proposals queued by the propose_update tool this turn.
+            proposal_ids = list(self.tools._proposals_this_turn)
+            self.tools._proposals_this_turn.clear()
+            for pid in proposal_ids:
+                proposal = self.tools.pending_proposals.get(pid)
+                if not proposal:
+                    continue
+                
+                diff_text = _render_diff(
+                    proposal["existing_content"], 
+                    proposal["proposed_content"], 
+                    proposal["rel_path"]
+                )
+                body = _format_proposal_message(proposal["rel_path"], proposal["rationale"], diff_text)
+                view = ProposalView(self, pid)
+                await message.channel.send(content=body, view=view)
 
 
 def _preflight_check():
