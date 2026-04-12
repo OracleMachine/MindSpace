@@ -1,5 +1,4 @@
 import os
-import uuid
 import logging
 from logger import logger
 
@@ -10,8 +9,6 @@ class MindSpaceTools:
     def __init__(self, kb, on_propose_update=None):
         self.kb = kb
         self.on_propose_update = on_propose_update
-        self.pending_proposals: dict[str, dict] = {}
-        self._proposals_this_turn: list[str] = []
 
     def _generate_tree(self, startpath: str) -> str:
         """Helper to generate a ASCII tree representation of a directory."""
