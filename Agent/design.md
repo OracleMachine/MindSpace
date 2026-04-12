@@ -195,6 +195,21 @@ The `KnowledgeBaseManager` decouples the source-of-truth (Git) from derived sema
 **Lazy Thought Indexing:**
 During passive dialogue, the `record_thought` tool appends insights to `stream_of_conscious.md` on disk. To avoid excessive Git noise and I/O overhead, these updates do **not** trigger an immediate commit or re-index. Instead, they are lazily picked up and indexed during the next naturally occurring `save_state` (e.g., when the user eventually drops a file or runs an active command).
 
+### 5.6 KB Maintenance: The "Instruction-Based Delegate" Pattern
+
+For structured KB maintenance (updating existing `.md` files, models, or research articles), the agent uses the `propose_update` tool. This follows a specialized **Stateless Rewrite Agent** architecture to ensure safety and prevent **Context Window Bloat**.
+
+**The Problem:** Asking the Dialogue LLM to rewrite a large KB file (e.g., a 2000-line document) within the conversation history would quickly exceed token limits and pollute the chat with redundant content.
+
+**The Solution:**
+1.  **Instruction Only:** The Dialogue LLM only provides a high-level `instruction` (e.g., "Add polling data for April") and a `rationale`. It never sees the full file content unless specifically requested.
+2.  **Stateless Delegate:** When `propose_update` is called, a separate, isolated, one-shot LLM call (the Rewrite Agent) is spawned. It reads the file, applies the instruction, and returns the *proposed* content. This content **never** enters the persistent conversation history.
+3.  **Memory-Based Staging:** The proposed content is stored in a `pending_proposals` dictionary in memory. The disk is **never touched** at this stage.
+4.  **Human-in-the-loop (Git Diff):** The bot renders a color-coded Git-style diff in Discord (using `difflib`) for user review.
+5.  **Commit on Approval:** The file is only written to disk and committed to Git (`kb.save_state`) once the user clicks **Apply**. Clicking **Discard** clears the memory, and **Refine** triggers another stateless rewrite based on feedback.
+
+**Invariant:** Staged proposals are volatile (cleared on bot restart) and isolated (do not affect `git status` or semantic indexing until applied). This prevents "dirty" unapproved edits from being swept up by background tasks like `!organize`.
+
 **Invariant:** cache file present ⇔ OpenViking store matches cache. Deleting the cache is always safe; the store will self-heal on next startup.
 
 ---
