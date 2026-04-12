@@ -643,27 +643,39 @@ OUTPUT FORMAT (markdown):
                     pass
 
             def _wrap_tool(fn):
-                doc = (fn.__doc__ or "").strip().splitlines()[0] if fn.__doc__ else ""
-                label = f"🔧 `{fn.__module__}.{fn.__name__}`"
-                if doc:
-                    label += f" — {doc}"
-
                 @functools.wraps(fn)
                 async def inner(*args, **kwargs):
-                    await on_progress(label)
+                    arg_parts = [repr(a)[:60] for a in args] + [f"{k}={repr(v)[:60]}" for k, v in kwargs.items()]
+                    await on_progress(f"🔧 {fn.__module__}.{fn.__name__}({', '.join(arg_parts)})")
                     return await asyncio.to_thread(fn, *args, **kwargs)
                 return inner
 
             wrapped_tools = [_wrap_tool(t) for t in available_tools]
 
-            reply = await self.agent.engage_dialogue(
-                message.content,
-                channel_name,
-                history=self.kb.get_history(channel_name),
-                tools=wrapped_tools,
-                mcp_sessions=self.mcp_pool.sessions if self.mcp_pool else None,
-                on_progress=on_progress,
-            )
+            # Wrap MCP session.call_tool so progress fires for MCP tools too.
+            _mcp_originals = {}
+            if self.mcp_pool:
+                for srv, session in self.mcp_pool.sessions.items():
+                    orig = session.call_tool
+                    _mcp_originals[srv] = orig
+                    async def _wrapped(name, arguments=None, *, _orig=orig, _srv=srv, **kw):
+                        arg_str = ", ".join(f"{k}={repr(v)[:60]}" for k, v in (arguments or {}).items())
+                        await on_progress(f"🌐 MCP {_srv}: {name}({arg_str})")
+                        return await _orig(name, arguments, **kw)
+                    session.call_tool = _wrapped
+
+            try:
+                reply = await self.agent.engage_dialogue(
+                    message.content,
+                    channel_name,
+                    history=self.kb.get_history(channel_name),
+                    tools=wrapped_tools,
+                    mcp_sessions=self.mcp_pool.sessions if self.mcp_pool else None,
+                    on_progress=on_progress,
+                )
+            finally:
+                for srv, orig in _mcp_originals.items():
+                    self.mcp_pool.sessions[srv].call_tool = orig
 
             try:
                 await status_msg.delete()
