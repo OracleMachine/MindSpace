@@ -830,10 +830,22 @@ TASK:
                 @functools.wraps(fn)
                 async def inner(*args, **kwargs):
                     arg_parts = [repr(a)[:60] for a in args] + [f"{k}={repr(v)[:60]}" for k, v in kwargs.items()]
-                    await on_progress(f"🔧 {fn.__module__}.{fn.__name__}({', '.join(arg_parts)})")
-                    if inspect.iscoroutinefunction(fn):
-                        return await fn(*args, **kwargs)
-                    return await asyncio.to_thread(fn, *args, **kwargs)
+                    call_summary = f"🔧 {fn.__name__}({', '.join(arg_parts)})"
+                    
+                    await on_progress(call_summary)
+                    try:
+                        if inspect.iscoroutinefunction(fn):
+                            result = await fn(*args, **kwargs)
+                        else:
+                            result = await asyncio.to_thread(fn, *args, **kwargs)
+                        
+                        # Concise one-liner for successful tool execution
+                        res_preview = str(result)[:100].replace('\n', ' ') + ("..." if len(str(result)) > 100 else "")
+                        logger.info(f"Tool: {call_summary} -> {res_preview}")
+                        return result
+                    except Exception as e:
+                        logger.error(f"Tool Error: {fn.__name__} failed: {e}")
+                        raise
                 return inner
 
             wrapped_tools = [_wrap_tool(t) for t in available_tools]
