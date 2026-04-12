@@ -300,7 +300,7 @@ class MindSpaceAgent:
         if callable(close_fn):
             close_fn()
 
-    async def engage_dialogue(self, user_message, channel_name, history: str = "", stream_content="", tools: list = None, mcp_sessions: list = None, on_progress=None):
+    async def engage_dialogue(self, user_message, channel_name, history: str = "", tools: list = None, mcp_sessions: list = None, on_progress=None):
         system_parts = [f"You are a knowledge agent in Discord channel #{channel_name}."]
         if history:
             system_parts.append(
@@ -309,27 +309,25 @@ class MindSpaceAgent:
                 f"All other names are Discord display names of human users.)\n\n"
                 f"{history}"
             )
-        if stream_content:
-            system_parts.append(f"--- Stream of Consciousness (extracted insights so far) ---\n{stream_content}")
-        
+
         system_parts.append(
-            "You have access to the channel's knowledge base and the global repository via tools. "
-            "If the user asks a question or makes a statement that requires factual information from the repository, "
-            "use the search tools autonomously before answering.\n\n"
-            "Reply naturally to the user. "
-            "If the message contains a valuable insight worth recording, append 'THOUGHT: [summary]' at the end. "
-            "Otherwise do not include a THOUGHT block."
+            "You do NOT have any pre-loaded knowledge about this channel. "
+            "All channel-specific information — prior insights, news digests, research notes, "
+            "stream-of-consciousness entries — is stored in the knowledge base and MUST be "
+            "retrieved via tools.\n\n"
+            "When the user asks a factual question, references prior discussion, or requests "
+            "information about topics in this channel, ALWAYS call `search_channel_knowledge_base` "
+            "first. Use `search_global_knowledge_base` for cross-channel queries. "
+            "Use `list_channel_files` to see what's stored.\n\n"
+            "If the user's message contains a valuable insight, analysis, or conclusion worth "
+            "preserving, call `record_thought` with a concise summary. Do this silently — "
+            "do not mention it in your reply.\n\n"
+            "Reply naturally to the user."
         )
         system_ctx = "\n\n".join(system_parts)
 
         response = await self.brain.achat(system_ctx, [], user_message, tools=tools, mcp_sessions=mcp_sessions, on_progress=on_progress)
-        reply = response
-        thought = None
-        if "THOUGHT:" in response:
-            parts = response.split("THOUGHT:")
-            reply = parts[0].strip()
-            thought = parts[1].strip()
-        return reply, thought
+        return response.strip()
 
     async def analyze_file(self, file_path: str, pageindex) -> tuple:
         ext = os.path.splitext(file_path)[1].lower()

@@ -120,7 +120,7 @@ class MindSpaceTools:
         Returns a list of tools bound to the specific channel.
         Uses explicit wrapper functions to ensure clean signatures and metadata for the SDK.
         """
-        
+
         def list_channel_files() -> str:
             """
             List all files and sub-folders in the CURRENT Discord channel in a tree structure.
@@ -135,9 +135,26 @@ class MindSpaceTools:
             """
             return self.search_channel_knowledge_base(query, channel_name)
 
+        def record_thought(summary: str) -> str:
+            """
+            Record a valuable insight extracted from the conversation into this channel's
+            stream of consciousness. Call this when the user shares noteworthy information,
+            analysis, or conclusions worth preserving for future reference.
+            Args:
+                summary: A concise summary of the insight to record.
+            """
+            logger.debug(f"Tool Execution: record_thought for #{channel_name}: {summary}")
+            try:
+                self.kb.append_thought(channel_name, summary)
+                return f"Thought recorded: {summary}"
+            except Exception as e:
+                logger.error(f"Tool Error: record_thought failed: {e}")
+                return f"Error recording thought: {str(e)}"
+
         return [
             list_channel_files,
             search_channel_knowledge_base,
             self.search_global_knowledge_base,
-            self.list_global_files
+            self.list_global_files,
+            record_thought,
         ]

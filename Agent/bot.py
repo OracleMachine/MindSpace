@@ -636,10 +636,6 @@ OUTPUT FORMAT (markdown):
 
             status_msg = await message.channel.send("🧠 **Thinking...**")
 
-            # AFC invokes sync tool wrappers on worker threads — we bounce the
-            # Discord edit back onto this loop via run_coroutine_threadsafe.
-            loop = asyncio.get_running_loop()
-
             async def on_progress(text: str):
                 try:
                     await status_msg.edit(content=f"🧠 **Thinking...**\n{text}")
@@ -653,21 +649,17 @@ OUTPUT FORMAT (markdown):
                     label += f" — {doc}"
 
                 @functools.wraps(fn)
-                def inner(*args, **kwargs):
-                    try:
-                        asyncio.run_coroutine_threadsafe(on_progress(label), loop)
-                    except Exception:
-                        pass
-                    return fn(*args, **kwargs)
+                async def inner(*args, **kwargs):
+                    await on_progress(label)
+                    return await asyncio.to_thread(fn, *args, **kwargs)
                 return inner
 
             wrapped_tools = [_wrap_tool(t) for t in available_tools]
 
-            reply, thought = await self.agent.engage_dialogue(
+            reply = await self.agent.engage_dialogue(
                 message.content,
                 channel_name,
                 history=self.kb.get_history(channel_name),
-                stream_content=self.kb.get_stream_content(channel_name),
                 tools=wrapped_tools,
                 mcp_sessions=self.mcp_pool.sessions if self.mcp_pool else None,
                 on_progress=on_progress,
@@ -680,10 +672,6 @@ OUTPUT FORMAT (markdown):
 
             self.kb.append_history(channel_name, message.author.display_name, message.content)
             self.kb.append_history(channel_name, "assistant", reply)
-
-            if thought:
-                self.kb.append_thought(channel_name, thought)
-                logger.info(f"💭 **THOUGHT**: Extracted in {channel_name}: {thought}", message.guild)
 
             await self.send_message_safe(message.channel, reply)
 

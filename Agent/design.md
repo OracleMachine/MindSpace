@@ -12,7 +12,7 @@ The system uses **VikingContextManager** (wrapping OpenViking) for context navig
 
 ## 2. Technical Stack
 
-- **Dialogue Brain:** Google GenAI SDK (`google-genai`) — passive chat, URL/file analysis, commit messages (`DIALOGUE_BRAIN_TYPE = "GoogleGenAISdk"`); LiteLLM available as an alternative
+- **Dialogue Brain:** Google GenAI SDK (`google-genai`) — passive chat, URL/file analysis, commit messages (`DIALOGUE_BRAIN_TYPE = "GoogleGenAISdk"`)
 - **Command Brain:** Gemini CLI (`gemini -y`) — agentic `!organize` / `!research` / `!omni` with web search, file I/O, multi-step loops (`COMMAND_BRAIN_TYPE = "gemini-cli"`)
 - **Language:** Python 3.12+
 - **Semantic Search:** [OpenViking](https://github.com/volcengine/OpenViking) — wrapped by `VikingContextManager` in `viking.py`; fully integrated
@@ -48,9 +48,9 @@ The system uses **VikingContextManager** (wrapping OpenViking) for context navig
 | Module | Responsibility |
 | :--- | :--- |
 | `bot.py` | Discord event loop (`on_message`), command routing (prefix `!` and slash `/`), startup sync. Single `KnowledgeBaseManager` instance (`self.kb`) initialized in `on_ready`. `on_guild_join` enforces the single-server constraint by leaving immediately if `self.kb` is already set. |
-| `agent.py` | LLM abstraction. `GoogleGenAIBrain` / `LiteLLMBrain` for dialogue (chat, URL/file analysis, commit messages). `GeminiCLIBrain` for commands — exposes `stream(prompt, cwd)` returning a `CliStream` async-iterable handle; env (`GEMINI_CLI_HOME`) and args (`-y`, `-m`) are always injected. |
+| `agent.py` | LLM abstraction. `GoogleGenAIBrain` for dialogue (chat, URL/file analysis, commit messages). `GeminiCLIBrain` for commands — exposes `stream(prompt, cwd)` returning a `CliStream` async-iterable handle; env (`GEMINI_CLI_HOME`) and args (`-y`, `-m`) are always injected. |
 | `manager.py` | Filesystem writes, Git commits, orchestrated `save_state` (commit + indexing), per-channel conversation history, stream reads |
-| `tools.py` | `MindSpaceTools`: closure-bound tool functions exposed to the LLM during passive dialogue (list files, search channel KB, search global KB) |
+| `tools.py` | `MindSpaceTools`: closure-bound tool functions exposed to the LLM during passive dialogue (list files, search channel KB, search global KB, record thought) |
 | `viking.py` | `VikingContextManager`: OpenViking wrapper; channel-scoped and global semantic search modes |
 | `pageindex_manager.py` | `PageIndexManager`: PageIndex cloud API wrapper; PDF upload, async processing, channel-scoped deep Q&A |
 | `mcp_bridge.py` | MCP (Model Context Protocol) integration. Handles two-pronged sync: rendering `config.yaml` servers into Gemini CLI's `settings.json` for active commands, and managing an `MCPSessionPool` for native SDK tool use in passive dialogue. |
@@ -61,6 +61,32 @@ The system uses **VikingContextManager** (wrapping OpenViking) for context navig
 
 ## 5. Memory & Context Architecture
 
+### 5.0 Design Principle: Tool-First Architecture
+
+**Core rule:** every structured behavior the bot performs during dialogue — retrieving data, recording insights, triggering side-effects — is expressed as a **typed tool call**, never as an in-band text convention parsed from the model's reply.
+
+**Why this is future-proof:**
+
+1. **Stable API contract.** A tool has a name, typed parameters, and a return value. This is a schema the model is trained to invoke correctly. As models improve, their tool-calling accuracy increases. In contrast, prompt conventions ("append THOUGHT: at the end") rely on the model following arbitrary formatting instructions — a capability that degrades, changes, or gets ignored across model versions and providers.
+
+2. **Composable extension.** Adding a new capability means writing a new function and exposing it. Adding a parameter to an existing capability (e.g. `record_thought(summary, category)`) is a one-line schema change. The equivalent in prompt engineering is another paragraph of instructions competing for the model's attention, with no type checking and no guarantee the model will follow it.
+
+3. **Observable and debuggable.** Tool calls are discrete events: logged, wrapped, intercepted. The bot's async wrapper decorates each call with a progress message visible to the user in Discord. Prompt-based conventions are invisible until you parse the model's output and discover it deviated.
+
+4. **Decoupled from the model.** Tools are pure Python functions. They work the same whether called by Gemini, GPT, Claude, or a future model. Prompt hacks are model-specific — what works for one model's instruction-following may break on another.
+
+5. **Testable in isolation.** Each tool can be unit-tested independently of the LLM. Prompt conventions can only be tested end-to-end by running the full model and hoping it produces the right format.
+
+**Applied examples in MindSpace:**
+
+| Behavior | Old (prompt engineering) | New (tool-first) |
+| :--- | :--- | :--- |
+| Record insight | Model appends `THOUGHT: [summary]` to reply; bot parses via `str.split("THOUGHT:")` | Model calls `record_thought(summary)` — typed, logged, wrapped with progress UI |
+| KB retrieval | `stream_of_conscious.md` pre-injected into system prompt (model skips tools since data is already present) | No pre-loaded KB; model MUST call `search_channel_knowledge_base(query)` to get data |
+| Future: tag/categorize | Would require "append TAG: category" + another string parser | Add `category: str` parameter to `record_thought` |
+
+### 5.1 Memory Layers
+
 The agent maintains two layers of memory per channel:
 
 | Layer | Storage | Scope | Reset on restart? |
@@ -68,24 +94,50 @@ The agent maintains two layers of memory per channel:
 | **Short-term** | In-memory bounded string (`CONVERSATION_HISTORY_MAX_CHARS = 8000` chars), trimmed at message boundaries | Current session | Yes (re-seeded from Discord history on startup) |
 | **Long-term** | `stream_of_conscious.md` on disk | Persistent across restarts | No |
 
-On every passive dialogue message, the agent receives:
+### 5.2 Tools-First Dialogue (No Pre-Loaded KB Context)
+
+On every passive dialogue message, the agent receives a **minimal** system context:
 
 ```
 [System Context]
   - Channel identity
   - Recent conversation history (char-bounded, oldest messages trimmed first)
-  - stream_of_conscious.md (all extracted insights so far)
-  - Tool-use instruction (search tools available for on-demand KB access)
+  - Instruction: "You do NOT have any pre-loaded knowledge about this channel.
+    All channel-specific information MUST be retrieved via tools."
+
+[Available Tools]
+  - search_channel_knowledge_base(query)  — Viking semantic search, channel-scoped
+  - search_global_knowledge_base(query)   — Viking semantic search, all channels
+  - list_channel_files()                  — directory tree of the channel folder
+  - list_global_files()                   — directory tree of all channels
+  - record_thought(summary)              — persist an insight to stream_of_conscious.md
 
 [Current Message]
   - User's latest message
 ```
 
-**Note:** The conversation history is embedded in the system context string and the brain's `chat()` call receives an empty turn list. Viking context is **not** pre-injected; instead, the agent calls tools (`search_channel_knowledge_base`, `search_global_knowledge_base`) autonomously when it determines they are needed.
+**Why tools-first?** The dialogue brain receives **no** pre-injected KB data (no `stream_of_conscious.md`, no Viking results). The model MUST call `search_channel_knowledge_base` to retrieve factual context. This ensures:
+- **Tool calls are the primary data path**, not a redundant fallback the model skips.
+- **Progress UI works** — each tool invocation triggers a visible status update in Discord.
+- **Prompt stays lean** — no token cost for KB context the model doesn't need.
 
-After each reply, the turn is appended to the in-memory history string and trimmed if over the char limit. Extracted `THOUGHT:` blocks are appended to `stream_of_conscious.md` and committed to Git.
+The conversation history is embedded in the system context string and the brain's `achat()` call receives an empty turn list. After each reply, the turn is appended to the in-memory history string and trimmed if over the char limit.
 
-### 5.1 Startup Seeding
+### 5.3 Thought Recording via `record_thought` Tool
+
+When the user shares a valuable insight, analysis, or conclusion, the model calls `record_thought(summary)` — an explicit tool invocation that appends the summary to `stream_of_conscious.md` via `kb.append_thought()`. The model is instructed to do this silently (no mention in its reply to the user).
+
+This replaces the previous approach of appending `THOUGHT: [summary]` as in-band text at the end of the reply and parsing it via string split. The tool-based approach is type-safe, model-version-stable, and exercises the progress UI.
+
+### 5.4 Progress UI — Async Tool Wrappers
+
+In `bot.py`, each tool is wrapped in an async decorator before being passed to the brain. The wrapper:
+1. Edits the Discord status message to show `🔧 module.tool_name — first line of docstring`.
+2. Executes the underlying (sync) tool via `asyncio.to_thread` so blocking calls (Viking search, filesystem walk) don't stall the event loop.
+
+The status message (`🧠 **Thinking...**`) is sent before the brain call and deleted after the reply lands. Tool wrappers use `functools.wraps` to preserve function metadata for the Google GenAI SDK's schema extraction.
+
+### 5.5 Startup Seeding
 
 On `on_ready`, the bot:
 1. Scans Discord channel history (last 50 messages per channel) and seeds the in-memory history cache (`_seed_channel_history`).
@@ -141,7 +193,7 @@ The `KnowledgeBaseManager` decouples the source-of-truth (Git) from derived sema
 - **`save_state(message)`**: The primary orchestrator. It finds all modified/untracked files in `Channels/`, performs a `git_commit`, and then triggers `index_files` on the delta. This ensures the repo and the DB stay in sync for all major events (file drops, active commands, research).
 
 **Lazy Thought Indexing:**
-During passive dialogue, extracted `THOUGHT:` blocks are appended to `stream_of_conscious.md` on disk. To avoid excessive Git noise and I/O overhead, these updates do **not** trigger an immediate commit or re-index. Instead, they are lazily picked up and indexed during the next naturally occurring `save_state` (e.g., when the user eventually drops a file or runs an active command).
+During passive dialogue, the `record_thought` tool appends insights to `stream_of_conscious.md` on disk. To avoid excessive Git noise and I/O overhead, these updates do **not** trigger an immediate commit or re-index. Instead, they are lazily picked up and indexed during the next naturally occurring `save_state` (e.g., when the user eventually drops a file or runs an active command).
 
 **Invariant:** cache file present ⇔ OpenViking store matches cache. Deleting the cache is always safe; the store will self-heal on next startup.
 
@@ -168,7 +220,7 @@ During passive dialogue, extracted `THOUGHT:` blocks are appended to `stream_of_
 | `!omni [query]` / `/omni` | Cross-KB synthesis across **all** channel folders (global Viking traversal), git commit | `OMNI-<date>-<subject>.md` |
 | URL in message | Fetches page, converts to Markdown snapshot, git commit | `WEBPAGE-<date>-<subject>.md` |
 | File attachment | Saves and semantically analyzes file (PDF via PageIndex, others via LLM), git commit | — |
-| Plain text | Passive dialogue: replies + tool access to KB + silently extracts `THOUGHT:` block to `stream_of_conscious.md` | — |
+| Plain text | Passive dialogue: replies via tools-first KB retrieval + records insights via `record_thought` tool call | — |
 
 All output `.md` files are sent back to the Discord channel as Discord file attachments immediately after creation.
 
@@ -260,18 +312,18 @@ mcp:
       url: https://mcp.wisburg.com/mcp
       headers:
         Authorization: Bearer ${WISBURG_MCP_TOKEN}
+```
 
 ### 11.4 Understanding MCP Sessions & Workflow
 
 An **MCP Session** is a live JSON-RPC connection (usually over Streamable HTTP/SSE) between the bot and a tool provider. Unlike static API keys, a session is an active channel that allows the LLM to discover and invoke tools dynamically.
 
 **The Execution Workflow:**
-1.  **Discovery & Connection:** At startup, `MCPSessionPool` establishes persistent connections to all configured servers.
-2.  **Injection:** These active sessions are passed to the `GoogleGenAIBrain`. The SDK automatically advertises the available MCP tools to the Gemini model as functional capabilities.
-3.  **The Tool Call Loop:** 
+1.  **Discovery & Connection:** At startup, `MCPSessionPool` establishes persistent connections to all configured servers and caches each server's tool list via `list_tools()`.
+2.  **Injection:** These active sessions are passed to `GoogleGenAIBrain.achat()` as part of the `tools=` list. The SDK automatically advertises the available MCP tools to the Gemini model as functional capabilities via AFC (Automatic Function Calling).
+3.  **The Tool Call Loop:**
     *   The LLM decides a tool is needed and emits a call.
     *   The SDK sends a `tools/call` request through the **MCP Session**.
     *   The MCP Server executes the local logic (e.g., database query, web fetch) and returns the result.
     *   The SDK feeds the result back to the LLM.
 4.  **Synthesis:** The LLM incorporates the tool data into its final response to the user.
-```
