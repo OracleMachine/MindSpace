@@ -575,6 +575,20 @@ OUTPUT FORMAT (markdown):
         await channel.send(f"✅ Omni search complete.", file=discord.File(file_path))
         logger.info(f"**OMNI**: {query}", guild)
 
+    async def handle_sync(self, channel, guild):
+        """Manually trigger a native directory sync for the current channel."""
+        channel_name = channel.name
+        await channel.send(f"🔄 Syncing Knowledge Base for `#{channel_name}`...")
+        
+        try:
+            # Trigger native directory sync for this channel (O(N) CPU scan, but O(1) token embeddings)
+            await asyncio.to_thread(self.kb.viking.rebuild_index, channel_name)
+            await channel.send(f"✅ KB sync complete for `#{channel_name}`. All manual edits and reorganizations are now indexed.")
+            logger.info(f"**SYNC**: Manual sync triggered for #{channel_name}", guild)
+        except Exception as e:
+            await channel.send(f"❌ Sync failed: {e}")
+            logger.error(f"**SYNC**: Failed for #{channel_name}: {e}", guild)
+
     async def handle_propose_update(self, channel_name: str, rel_path: str, instruction: str, rationale: str):
         """Callback triggered by the propose_update tool. 
         Uses an isolated LLM call to generate proposed content in memory."""
@@ -775,6 +789,11 @@ OUTPUT FORMAT (markdown):
                     await message.channel.send("Usage: `!omni [query]`")
                     return
                 await self.handle_omni(message.channel, message.guild, args, message.id)
+            elif cmd == "sync":
+                if args:
+                    await message.channel.send("Usage: `!sync` (takes no arguments)")
+                    return
+                await self.handle_sync(message.channel, message.guild)
             return
 
         # --- 2. KNOWLEDGE INGESTION (URLs / file attachments) ---
