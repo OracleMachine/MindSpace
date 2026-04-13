@@ -163,7 +163,6 @@ class MindSpaceBot(discord.Client):
         self.tools = None
         self.mcp_pool = None  # initialized in setup_hook; drains into dialogue brain tools
         self._pending_proposals: dict[str, dict] = {}
-        self._proposals_this_turn: list[str] = []
         self.tree = app_commands.CommandTree(self)
 
         # Discord Log Queue (Async sink for the sync logger)
@@ -591,7 +590,8 @@ OUTPUT FORMAT (markdown):
 
     async def handle_propose_update(self, channel_name: str, rel_path: str, instruction: str, rationale: str):
         """Callback triggered by the propose_update tool. 
-        Uses an isolated LLM call to generate proposed content in memory."""
+        Uses an isolated LLM call to generate proposed content in memory.
+        Returns the proposal_id on success, or an error message."""
         channel_path = self.kb.get_channel_path(channel_name)
         abs_path = os.path.abspath(os.path.join(channel_path, rel_path))
 
@@ -641,9 +641,7 @@ OUTPUT FORMAT (markdown):
             "rationale": rationale,
             "instruction": instruction
         }
-        self._proposals_this_turn.append(proposal_id)
-
-        return f"Proposal for `{rel_path}` generated and queued for your review."
+        return proposal_id
 
     # --- HELPERS ---
 
@@ -832,7 +830,15 @@ OUTPUT FORMAT (markdown):
 
         # --- 3. PASSIVE DIALOGUE (thought recording + tool-augmented replies) ---
         else:
-            available_tools = self.tools.get_tools(channel_name, on_propose_update=self.handle_propose_update)
+            proposal_ids = []
+            async def on_propose(c, p, i, r):
+                res = await self.handle_propose_update(c, p, i, r)
+                if not res.startswith("Error") and len(res) <= 8: # success returns 8-char hex id
+                    proposal_ids.append(res)
+                    return f"Proposal for `{p}` generated and queued for your review."
+                return res
+
+            available_tools = self.tools.get_tools(channel_name, on_propose_update=on_propose)
 
             status_msg = await message.channel.send("🧠 **Thinking...**")
 
@@ -903,8 +909,6 @@ OUTPUT FORMAT (markdown):
 
             # --- SEND PENDING PROPOSALS ---
             # We process any proposals queued by the propose_update tool this turn.
-            proposal_ids = list(self._proposals_this_turn)
-            self._proposals_this_turn.clear()
             for pid in proposal_ids:
                 proposal = self._pending_proposals.get(pid)
                 if not proposal:
