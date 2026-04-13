@@ -37,9 +37,9 @@ class LLMBrain(ABC):
         return await asyncio.to_thread(self.chat, system_ctx, history, message, tools)
 
 class GoogleGenAIBrain(LLMBrain):
-    def __init__(self, model=config.GEMINI_SDK_MODEL):
+    def __init__(self, model=config.Brains.GEMINI_SDK_MODEL):
         self.model = model
-        self.client = genai.Client(api_key=config.GEMINI_API_KEY)
+        self.client = genai.Client(api_key=config.Auth.GEMINI_API_KEY)
 
     def close(self):
         self.client.close()
@@ -148,8 +148,8 @@ class GeminiCLIBrain(LLMBrain):
 
     def __init__(self, yolo: bool = True, model: str = None):
         self.yolo = yolo
-        self.model = model or config.GEMINI_CLI_MODEL
-        self.env = {**os.environ, "GEMINI_CLI_HOME": config.GEMINI_CLI_HOME_DIR}
+        self.model = model or config.Brains.GEMINI_CLI_MODEL
+        self.env = {**os.environ, "GEMINI_CLI_HOME": config.Paths.GEMINI_CLI_HOME}
 
     def build_args(self) -> list[str]:
         args = ["gemini", "-y", "-o", "stream-json"]
@@ -285,11 +285,11 @@ class MindSpaceAgent:
     def __init__(self, brain_type=None):
         # Always use the native Google GenAI SDK for dialogue; runtime fallback disabled.
         # brain_type is ignored; hardcoded to GoogleGenAIBrain.
-        logger.info(f"🧠 MindSpaceAgent: Dialogue brain → Google GenAI SDK (Model: {config.GEMINI_SDK_MODEL})")
+        logger.info(f"🧠 MindSpaceAgent: Dialogue brain → Google GenAI SDK (Model: {config.Brains.GEMINI_SDK_MODEL})")
         self.brain = GoogleGenAIBrain()
 
         # Command brain: !organize, !consolidate, !research, !omni
-        logger.info(f"🖥️  MindSpaceAgent: Command brain → Gemini CLI (YOLO mode, model={config.GEMINI_CLI_MODEL or 'default'})")
+        logger.info(f"🖥️  MindSpaceAgent: Command brain → Gemini CLI (YOLO mode, model={config.Brains.GEMINI_CLI_MODEL or 'default'})")
         self.cli_brain = GeminiCLIBrain()
 
     async def run_command(self, instruction: str, context: str = None) -> str:

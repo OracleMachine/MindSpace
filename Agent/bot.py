@@ -185,7 +185,7 @@ class MindSpaceBot(discord.Client):
         """
         self.agent = MindSpaceAgent()
         mcp_bridge.sync_cli_settings()
-        self.mcp_pool = mcp_bridge.MCPSessionPool(config.MCP_SERVERS)
+        self.mcp_pool = mcp_bridge.MCPSessionPool(config.MCP.SERVERS)
         await self.mcp_pool.connect()
 
         # Start the log publisher immediately
@@ -553,7 +553,7 @@ OUTPUT FORMAT (markdown):
         # point) but is sandboxed from bot-home/, openviking/, and ov.conf.
         handle = await self.agent.cli_brain.stream(
             prompt=prompt,
-            cwd=config.CHANNELS_PATH,
+            cwd=config.Paths.CHANNELS,
         )
         await self._render_stream_to_channel(
             channel, header=f"🌐 Gemini CLI synthesizing: {query}...", handle=handle,
@@ -599,7 +599,7 @@ OUTPUT FORMAT (markdown):
         abs_path = os.path.abspath(os.path.join(channel_path, rel_path))
 
         # Security check: ensure path is under Channels/
-        channels_abs = os.path.abspath(config.CHANNELS_PATH)
+        channels_abs = os.path.abspath(config.Paths.CHANNELS)
         if os.path.commonpath([abs_path, channels_abs]) != channels_abs:
             return "Error: Security violation — cannot edit files outside the knowledge base."
 
@@ -651,7 +651,7 @@ OUTPUT FORMAT (markdown):
     async def _sync_kb_channels(self, guild):
         """Create Discord channels for any KB folders that don't have a matching channel."""
         existing_names = {ch.name for ch in guild.text_channels}
-        root = config.CHANNELS_PATH
+        root = config.Paths.CHANNELS
         try:
             for entry in os.scandir(root):
                 if not entry.is_dir() or entry.name.startswith(".") or entry.name == "system-log":
@@ -953,12 +953,12 @@ def _preflight_check():
     # API Key Validation (Minimal live calls)
     try:
         logger.info("Preflight: validating PageIndex API key (list_documents)...")
-        pi_client = PageIndexClient(api_key=config.PAGEINDEX_API_KEY)
+        pi_client = PageIndexClient(api_key=config.Auth.PAGEINDEX_API_KEY)
         pi_client.list_documents(limit=1)
 
         logger.info("Preflight: initializing OpenViking client...")
-        os.environ.setdefault("OPENVIKING_CONFIG_FILE", config.OPENVIKING_CONF_PATH)
-        ov_client = ov.SyncOpenViking(path=config.OPENVIKING_DATA_PATH)
+        os.environ.setdefault("OPENVIKING_CONFIG_FILE", config.Paths.VIKING_CONF)
+        ov_client = ov.SyncOpenViking(path=config.Paths.VIKING_DATA)
         ov_client.initialize()
         logger.info("Preflight: probing OpenViking with test query...")
         ov_client.find("preflight check", limit=1)
@@ -969,12 +969,12 @@ def _preflight_check():
     # MCP servers — connect once to verify reachability and advertise tool counts.
     # Per-server failures are logged but do not abort startup (matches runtime
     # pool behavior: a transient MCP outage shouldn't take the bot down).
-    if config.MCP_SERVERS:
-        logger.info(f"Preflight: probing {len(config.MCP_SERVERS)} MCP server(s)...")
+    if config.MCP.SERVERS:
+        logger.info(f"Preflight: probing {len(config.MCP.SERVERS)} MCP server(s)...")
         import mcp_bridge
 
         async def _probe_mcp():
-            pool = mcp_bridge.MCPSessionPool(config.MCP_SERVERS)
+            pool = mcp_bridge.MCPSessionPool(config.MCP.SERVERS)
             await pool.connect()
             try:
                 for name, tool_names in pool.tool_lists.items():
@@ -982,7 +982,7 @@ def _preflight_check():
                         f"Preflight: MCP — {name} exposes {len(tool_names)} tool(s)"
                     )
                 connected = len(pool.sessions)
-                total = len(config.MCP_SERVERS)
+                total = len(config.MCP.SERVERS)
                 if connected == 0:
                     logger.warning(f"Preflight: MCP — 0/{total} servers reachable")
                 else:
@@ -1006,14 +1006,14 @@ def _startup_indexing():
     from viking import VikingContextManager
     from pageindex_manager import PageIndexManager
 
-    viking = VikingContextManager(config.CHANNELS_PATH)
+    viking = VikingContextManager(config.Paths.CHANNELS)
     pageindex = PageIndexManager()
 
     logger.info("Startup Indexing: running OpenViking rebuild_index (blocking)...")
     viking.rebuild_index()
 
     logger.info("Startup Indexing: running PageIndex rebuild_index (blocking)...")
-    pageindex.rebuild_index(config.CHANNELS_PATH)
+    pageindex.rebuild_index(config.Paths.CHANNELS)
     
     # Clean up the sync clients before starting the async bot
     viking.close()
@@ -1023,9 +1023,9 @@ def _startup_indexing():
 if __name__ == "__main__":
     logger.info("========== Launching..... ==========")
     required_vars = {
-        "DISCORD_TOKEN": config.DISCORD_TOKEN,
-        "GEMINI_API_KEY": config.GEMINI_API_KEY,
-        "PAGEINDEX_API_KEY": config.PAGEINDEX_API_KEY,
+        "DISCORD_TOKEN": config.Auth.DISCORD_TOKEN,
+        "GEMINI_API_KEY": config.Auth.GEMINI_API_KEY,
+        "PAGEINDEX_API_KEY": config.Auth.PAGEINDEX_API_KEY,
     }
 
     missing = [var for var, val in required_vars.items() if not val]
@@ -1045,4 +1045,4 @@ if __name__ == "__main__":
     intents = discord.Intents.default()
     intents.message_content = True
     bot = MindSpaceBot(intents=intents)
-    bot.run(config.DISCORD_TOKEN)
+    bot.run(config.Auth.DISCORD_TOKEN)

@@ -1,6 +1,6 @@
 """MCP integration bridge.
 
-Two entry points, one config source (`config.MCP_SERVERS`):
+Two entry points, one config source (`config.MCP.SERVERS`):
 
 - `sync_cli_settings()` renders `mcpServers` into the Gemini CLI's
   settings.json so the command brain (!organize, !research, !omni)
@@ -22,11 +22,11 @@ from logger import logger
 
 
 def sync_cli_settings() -> None:
-    if not config.MCP_SERVERS:
+    if not config.MCP.SERVERS:
         logger.debug("MCP: no servers configured, skipping settings.json sync")
         return
 
-    settings_path = os.path.join(config.GEMINI_CLI_HOME_DIR, ".gemini", "settings.json")
+    settings_path = os.path.join(config.Paths.GEMINI_CLI_HOME, ".gemini", "settings.json")
     os.makedirs(os.path.dirname(settings_path), exist_ok=True)
 
     existing: dict = {}
@@ -37,12 +37,12 @@ def sync_cli_settings() -> None:
         except Exception as e:
             logger.warning(f"MCP: existing {settings_path} unparseable, rewriting: {e}")
 
-    existing["mcpServers"] = config.MCP_SERVERS
+    existing["mcpServers"] = config.MCP.SERVERS
 
     with open(settings_path, "w") as f:
         json.dump(existing, f, indent=2)
 
-    logger.info(f"MCP: synced {len(config.MCP_SERVERS)} server(s) into {settings_path}")
+    logger.info(f"MCP: synced {len(config.MCP.SERVERS)} server(s) into {settings_path}")
 
 
 class MCPSessionPool:

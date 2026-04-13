@@ -14,8 +14,8 @@ class KnowledgeBaseManager:
     """
     def __init__(self, server_name):
         self.server_name = self._sanitize_name(server_name)
-        self.root_path = config.BASE_STORAGE_PATH
-        self.channels_path = config.CHANNELS_PATH
+        self.root_path = config.Storage.BASE_PATH
+        self.channels_path = config.Paths.CHANNELS
         logger.info(f"KB: opening git repo at {self.root_path}")
         self._repo = self._ensure_repo_exists()
         logger.info("KB: initializing VikingContextManager (OpenViking client)...")
@@ -136,9 +136,9 @@ class KnowledgeBaseManager:
 
     def _trim(self, text: str) -> str:
         """Trim text from the start to the next message boundary if over the char limit."""
-        if len(text) <= config.CONVERSATION_HISTORY_MAX_CHARS:
+        if len(text) <= config.Conversation.HISTORY_MAX_CHARS:
             return text
-        overflow = len(text) - config.CONVERSATION_HISTORY_MAX_CHARS
+        overflow = len(text) - config.Conversation.HISTORY_MAX_CHARS
         cut = text.find("\n[", overflow)
         return text[cut + 1:] if cut != -1 else ""
 

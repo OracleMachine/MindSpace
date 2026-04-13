@@ -10,9 +10,9 @@ INFO = logging.INFO
 WARNING = logging.WARNING
 ERROR = logging.ERROR
 
-_STREAM_LEVEL = getattr(logging, config.LOG_STREAM_LEVEL, logging.INFO)
-_FILE_LEVEL = getattr(logging, config.LOG_FILE_LEVEL, logging.DEBUG)
-_DISCORD_LEVEL = getattr(logging, config.LOG_DISCORD_LEVEL, logging.INFO)
+_STREAM_LEVEL = getattr(logging, config.Log.STREAM_LEVEL, logging.INFO)
+_FILE_LEVEL = getattr(logging, config.Log.FILE_LEVEL, logging.DEBUG)
+_DISCORD_LEVEL = getattr(logging, config.Log.DISCORD_LEVEL, logging.INFO)
 
 # Format/datefmt only — no `level` kwarg so root logger's level stays at
 # Python's default (WARNING), keeping third-party libs quiet.
@@ -38,10 +38,10 @@ _stream_handler.setFormatter(_FORMATTER)
 _logger.addHandler(_stream_handler)
 
 try:
-    os.makedirs(os.path.dirname(config.LOG_FILE_PATH), exist_ok=True)
+    os.makedirs(os.path.dirname(config.Log.FILE_PATH), exist_ok=True)
     # Rotate at midnight, keep 3 days of history (mindspace.log + 3 dated backups).
     _file_handler = logging.handlers.TimedRotatingFileHandler(
-        config.LOG_FILE_PATH,
+        config.Log.FILE_PATH,
         when="midnight",
         backupCount=3,
         encoding="utf-8",
@@ -50,7 +50,7 @@ try:
     _file_handler.setFormatter(_FORMATTER)
     _logger.addHandler(_file_handler)
 except OSError as e:
-    _logger.warning(f"Could not open log file {config.LOG_FILE_PATH}: {e}")
+    _logger.warning(f"Could not open log file {config.Log.FILE_PATH}: {e}")
 
 class MindSpaceLogger:
     """Unified global logger that routes logs to Console (sync) and Discord (via sync callback)."""

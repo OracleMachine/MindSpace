@@ -7,7 +7,7 @@ import config
 from logger import logger
 
 
-_INDEX_FILE = os.path.join(config.BASE_STORAGE_PATH, ".pageindex_index.json")
+_INDEX_FILE = os.path.join(config.Storage.BASE_PATH, ".pageindex_index.json")
 _POLL_INTERVAL = 3   # seconds between readiness polls
 _POLL_TIMEOUT = 120  # max seconds to wait for processing
 
@@ -26,7 +26,7 @@ class PageIndexManager:
     """
 
     def __init__(self):
-        self.client = PageIndexClient(api_key=config.PAGEINDEX_API_KEY)
+        self.client = PageIndexClient(api_key=config.Auth.PAGEINDEX_API_KEY)
         self._index = self._load_index()   # {"folders": {channel: id}, "documents": {path: doc_id}}
 
     # --- Persistence ---

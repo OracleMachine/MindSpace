@@ -18,9 +18,9 @@ class VikingContextManager:
     def __init__(self, root_path: str):
         self.root_path = root_path
         self._ensured_channels: set[str] = set()  # channel URIs confirmed to exist
-        os.environ.setdefault("OPENVIKING_CONFIG_FILE", config.OPENVIKING_CONF_PATH)
-        logger.info(f"Viking: constructing SyncOpenViking(path={config.OPENVIKING_DATA_PATH})...")
-        self.client = ov.SyncOpenViking(path=config.OPENVIKING_DATA_PATH)
+        os.environ.setdefault("OPENVIKING_CONFIG_FILE", config.Paths.VIKING_CONF)
+        logger.info(f"Viking: constructing SyncOpenViking(path={config.Paths.VIKING_DATA})...")
+        self.client = ov.SyncOpenViking(path=config.Paths.VIKING_DATA)
         logger.info("Viking: calling client.initialize()...")
         self.client.initialize()
         logger.info("Viking: client initialized")
@@ -46,7 +46,7 @@ class VikingContextManager:
         path_obj = Path(file_path)
         # Skip ignored extensions from config (e.g., 'pdf' vs '.pdf')
         ext = path_obj.suffix.lower().lstrip(".")
-        if ext in config.IGNORED_EXTENSIONS:
+        if ext in config.Storage.IGNORED_EXTENSIONS:
             return False
 
         if path_obj.suffix.lower() != ".md":
@@ -77,8 +77,8 @@ class VikingContextManager:
         try:
             # OpenViking walks the dir and uses local CPU hashes to skip unchanged files (0 tokens).
             # We exclude files based on config (typically PDFs, as they are handled by PageIndex).
-            # config.IGNORED_EXTENSIONS is now dot-less (e.g. ['pdf', 'jpg'])
-            exclude_patterns = [f"*.{ext}" for ext in config.IGNORED_EXTENSIONS]
+            # config.Storage.IGNORED_EXTENSIONS is now dot-less (e.g. ['pdf', 'jpg'])
+            exclude_patterns = [f"*.{ext}" for ext in config.Storage.IGNORED_EXTENSIONS]
             self.client.add_resource(path=target_path, parent=parent_uri, exclude=exclude_patterns)
             self.client.wait_processed()
             logger.info(f"OpenViking: Sync complete for {target_path}")
