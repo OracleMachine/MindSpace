@@ -11,6 +11,15 @@ import uuid
 import inspect
 from discord import app_commands
 
+# CRITICAL: Suppress litellm background logging workers BEFORE they can start.
+# This prevents 'Event loop is closed' errors during pre-launch indexing.
+try:
+    import litellm
+    litellm._suppress_logging_worker = True
+    litellm.suppress_debug_info = True
+except ImportError:
+    pass
+
 
 def _render_diff(existing: str, proposed: str, file_path: str) -> str:
     if not existing:
@@ -993,14 +1002,6 @@ def _startup_indexing():
     Perform blocking Knowledge Base indexing BEFORE launching the Discord bot.
     This ensures Viking and PageIndex are ready without stalling the Discord heartbeat.
     """
-    # Suppress background workers from libraries that might interfere with the loop
-    try:
-        import litellm
-        litellm.suppress_debug_info = True
-        litellm.set_verbose = False
-    except ImportError:
-        pass
-
     logger.info("Startup Indexing: initializing Viking and PageIndex...")
     from viking import VikingContextManager
     from pageindex_manager import PageIndexManager
