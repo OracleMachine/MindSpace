@@ -69,7 +69,8 @@ class VikingContextManager:
 
         try:
             # OpenViking walks the dir and uses local CPU hashes to skip unchanged files (0 tokens).
-            self.client.add_resource(path=target_path, parent=parent_uri)
+            # We explicitly exclude PDFs because they are handled by PageIndex for deep reasoning.
+            self.client.add_resource(path=target_path, parent=parent_uri, exclude=["*.pdf"])
             self.client.wait_processed()
             logger.info(f"OpenViking: Sync complete for {target_path}")
         except Exception as e:
