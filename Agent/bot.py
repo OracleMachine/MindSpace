@@ -993,6 +993,14 @@ def _startup_indexing():
     Perform blocking Knowledge Base indexing BEFORE launching the Discord bot.
     This ensures Viking and PageIndex are ready without stalling the Discord heartbeat.
     """
+    # Suppress background workers from libraries that might interfere with the loop
+    try:
+        import litellm
+        litellm.suppress_debug_info = True
+        litellm.set_verbose = False
+    except ImportError:
+        pass
+
     logger.info("Startup Indexing: initializing Viking and PageIndex...")
     from viking import VikingContextManager
     from pageindex_manager import PageIndexManager
@@ -1005,6 +1013,9 @@ def _startup_indexing():
 
     logger.info("Startup Indexing: running PageIndex rebuild_index (blocking)...")
     pageindex.rebuild_index(config.CHANNELS_PATH)
+    
+    # Clean up the sync clients before starting the async bot
+    viking.close()
     logger.info("Startup Indexing: complete.")
 
 
