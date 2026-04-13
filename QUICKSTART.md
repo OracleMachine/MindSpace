@@ -50,7 +50,7 @@ log:
 
 storage:
   base_path: /home/yolo/repos/Thought    # where the knowledge base lives
-  ignored_extensions: [".pdf"]          # extensions to skip during OpenViking indexing
+  ignored_extensions: ["pdf", "jpg"]    # extensions to skip during OpenViking indexing
 
 brains:
   dialogue_type: GoogleGenAISdk

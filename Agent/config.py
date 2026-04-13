@@ -31,7 +31,7 @@ PAGEINDEX_API_KEY = os.getenv("PAGEINDEX_API_KEY")
 _storage = _cfg.get("storage", {})
 BASE_STORAGE_PATH = _storage.get("base_path", "/home/yolo/repos/Thought")
 OPENVIKING_URI_PREFIX = _storage.get("openviking_uri_prefix", "viking://")
-IGNORED_EXTENSIONS = _storage.get("ignored_extensions", [".pdf"])
+IGNORED_EXTENSIONS = _storage.get("ignored_extensions", ["pdf"])
 
 # --- Brains ---
 _brains = _cfg.get("brains", {})
