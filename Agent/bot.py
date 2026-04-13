@@ -239,12 +239,6 @@ class MindSpaceBot(discord.Client):
         logger.info("Startup: syncing KB folders → Discord channels...")
         await self._sync_kb_channels(guild)
 
-        # Initial indexing (full sync on startup)
-        logger.info("Startup: running OpenViking rebuild_index (may re-index files on disk)...")
-        self.kb.viking.rebuild_index()
-        logger.info("Startup: running PageIndex rebuild_index (uploads new PDFs, polls until ready)...")
-        self.kb.pageindex.rebuild_index(self.kb.channels_path)
-        
         # Get Git info for both repos
         agent_repo = git.Repo(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         agent_git = agent_repo.git.describe("--tags", "--dirty", "--always")
@@ -994,6 +988,26 @@ def _preflight_check():
     logger.info("Preflight: all checks passed")
 
 
+def _startup_indexing():
+    """
+    Perform blocking Knowledge Base indexing BEFORE launching the Discord bot.
+    This ensures Viking and PageIndex are ready without stalling the Discord heartbeat.
+    """
+    logger.info("Startup Indexing: initializing Viking and PageIndex...")
+    from viking import VikingContextManager
+    from pageindex_manager import PageIndexManager
+
+    viking = VikingContextManager(config.CHANNELS_PATH)
+    pageindex = PageIndexManager()
+
+    logger.info("Startup Indexing: running OpenViking rebuild_index (blocking)...")
+    viking.rebuild_index()
+
+    logger.info("Startup Indexing: running PageIndex rebuild_index (blocking)...")
+    pageindex.rebuild_index(config.CHANNELS_PATH)
+    logger.info("Startup Indexing: complete.")
+
+
 if __name__ == "__main__":
     logger.info("========== Launching..... ==========")
     required_vars = {
@@ -1010,11 +1024,12 @@ if __name__ == "__main__":
 
     try:
         _preflight_check()
-    except RuntimeError as e:
-        logger.error(f"❌ Preflight check failed: {e}")
+        _startup_indexing()
+    except Exception as e:
+        logger.error(f"❌ Pre-launch check or indexing failed: {e}")
         exit(1)
 
-    logger.info("✅ Preflight passed. Starting MindSpace Bot...")
+    logger.info("✅ Startup ready. Launching MindSpace Bot...")
     intents = discord.Intents.default()
     intents.message_content = True
     bot = MindSpaceBot(intents=intents)
