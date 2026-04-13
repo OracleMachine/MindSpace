@@ -9,6 +9,7 @@ log:
 storage:
   base_path: /home/yolo/repos/Thought
   openviking_uri_prefix: "viking://"
+  ignored_extensions: [".pdf"] # Extensions to skip during OpenViking indexing
 
 brains:
   # Dialogue brain: passive chat, URL/file analysis, commit messages.

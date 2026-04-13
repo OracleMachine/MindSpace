@@ -54,7 +54,7 @@ The system uses **VikingContextManager** (wrapping OpenViking) for context navig
 | `viking.py` | `VikingContextManager`: OpenViking wrapper; channel-scoped and global semantic search modes |
 | `pageindex_manager.py` | `PageIndexManager`: PageIndex cloud API wrapper; PDF upload, async processing, channel-scoped deep Q&A |
 | `mcp_bridge.py` | MCP (Model Context Protocol) integration. Handles two-pronged sync: rendering `config.yaml` servers into Gemini CLI's `settings.json` for active commands, and managing an `MCPSessionPool` for native SDK tool use in passive dialogue. |
-| `config.py` | Centralized configuration for paths, models, brain type, history char limit, and MCP server definitions. |
+| `config.py` | Centralized configuration for paths, models, brain type, history char limit, ignored extensions, and MCP server definitions. |
 | `logger.py` | Dual-output logger: console (all levels) + Discord `#system-log` (INFO and above, guild-scoped) |
 
 ---

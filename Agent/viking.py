@@ -42,6 +42,11 @@ class VikingContextManager:
         """
         Surgically upsert a single file into the index (O(1) operation).
         """
+        # Skip ignored extensions from config
+        ext = os.path.splitext(file_path)[1].lower()
+        if ext in config.IGNORED_EXTENSIONS:
+            return False
+
         if not file_path.endswith(".md"):
             return False
         channel_uri = self._ensure_channel_dir(channel_name)
@@ -69,8 +74,9 @@ class VikingContextManager:
 
         try:
             # OpenViking walks the dir and uses local CPU hashes to skip unchanged files (0 tokens).
-            # We explicitly exclude PDFs because they are handled by PageIndex for deep reasoning.
-            self.client.add_resource(path=target_path, parent=parent_uri, exclude=["*.pdf"])
+            # We exclude files based on config (typically PDFs, as they are handled by PageIndex).
+            exclude_patterns = [f"*{ext}" for ext in config.IGNORED_EXTENSIONS]
+            self.client.add_resource(path=target_path, parent=parent_uri, exclude=exclude_patterns)
             self.client.wait_processed()
             logger.info(f"OpenViking: Sync complete for {target_path}")
         except Exception as e:
