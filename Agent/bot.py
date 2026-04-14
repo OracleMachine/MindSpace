@@ -591,8 +591,37 @@ OUTPUT FORMAT (markdown):
             await channel.send(f"❌ Sync failed: {e}")
             logger.error(f"**SYNC**: Failed for #{channel_name}: {e}", guild)
 
+    def _create_proposal(self, channel_name: str, rel_path: str,
+                          existing_content: str, proposed_content: str,
+                          instruction: str, rationale: str) -> str:
+        """Store a proposal in memory and return its 8-char hex id."""
+        proposal_id = uuid.uuid4().hex[:8]
+        self._pending_proposals[proposal_id] = {
+            "channel_name": channel_name,
+            "rel_path": rel_path,
+            "existing_content": existing_content,
+            "proposed_content": proposed_content,
+            "rationale": rationale,
+            "instruction": instruction,
+        }
+        return proposal_id
+
+    async def _send_proposal(self, channel, proposal_id: str):
+        """Render a pending proposal as a diff message with Apply/Discard/Refine buttons."""
+        proposal = self._pending_proposals.get(proposal_id)
+        if not proposal:
+            return
+        diff_text = _render_diff(
+            proposal["existing_content"],
+            proposal["proposed_content"],
+            proposal["rel_path"],
+        )
+        body = _format_proposal_message(proposal["rel_path"], proposal["rationale"], diff_text)
+        view = ProposalView(self, proposal_id)
+        await channel.send(content=body, view=view)
+
     async def handle_propose_update(self, channel_name: str, rel_path: str, instruction: str, rationale: str):
-        """Callback triggered by the propose_update tool. 
+        """Callback triggered by the propose_update tool.
         Uses an isolated LLM call to generate proposed content in memory.
         Returns the proposal_id on success, or an error message."""
         channel_path = self.kb.get_channel_path(channel_name)
@@ -635,16 +664,215 @@ OUTPUT FORMAT (markdown):
         if not diff_text.strip():
             return f"The file `{rel_path}` already appears to satisfy the instruction."
 
-        proposal_id = uuid.uuid4().hex[:8]
-        self._pending_proposals[proposal_id] = {
-            "channel_name": channel_name,
-            "rel_path": rel_path,
-            "existing_content": existing_content,
-            "proposed_content": proposed_content,
-            "rationale": rationale,
-            "instruction": instruction
-        }
-        return proposal_id
+        return self._create_proposal(
+            channel_name=channel_name,
+            rel_path=rel_path,
+            existing_content=existing_content,
+            proposed_content=proposed_content,
+            instruction=instruction,
+            rationale=rationale,
+        )
+
+    # --- FILE DROP HANDLERS ---
+
+    _TEXT_EXTS = {
+        ".md", ".markdown", ".txt", ".rst", ".json", ".yaml", ".yml",
+        ".toml", ".csv", ".tsv", ".log", ".py", ".js", ".ts",
+    }
+
+    def _sanitize_subfolder(self, channel_name: str, subfolder: str) -> str:
+        """Reject path traversal and absolute paths. Returns a safe subfolder
+        relative to the channel folder, or '' on rejection."""
+        if not subfolder:
+            return ""
+        sub = subfolder.strip().strip("/")
+        if not sub or os.path.isabs(sub) or ".." in sub.split(os.sep) or ".." in sub.split("/"):
+            logger.warning(f"autoroute: rejected subfolder {subfolder!r} (traversal/absolute)")
+            return ""
+        channel_abs = os.path.abspath(os.path.join(self.kb.channels_path, channel_name))
+        target_abs = os.path.abspath(os.path.join(channel_abs, sub))
+        if os.path.commonpath([target_abs, channel_abs]) != channel_abs:
+            logger.warning(f"autoroute: rejected subfolder {subfolder!r} (escapes channel)")
+            return ""
+        return sub
+
+    def _sanitize_filename(self, filename: str, fallback: str) -> str:
+        """Strip path separators and hidden-file prefixes. Preserve the
+        fallback's extension if the LLM dropped it."""
+        if not filename:
+            return fallback
+        name = os.path.basename(filename).lstrip(".")
+        if not name:
+            return fallback
+        fb_ext = os.path.splitext(fallback)[1]
+        if fb_ext and not os.path.splitext(name)[1]:
+            name = name + fb_ext
+        return name
+
+    def _dedupe_path(self, abs_path: str) -> str:
+        """If abs_path exists, append -2, -3, ... before the extension until free."""
+        if not os.path.exists(abs_path):
+            return abs_path
+        stem, ext = os.path.splitext(abs_path)
+        i = 2
+        while True:
+            candidate = f"{stem}-{i}{ext}"
+            if not os.path.exists(candidate):
+                return candidate
+            i += 1
+
+    async def _handle_file_autoroute(self, message, attachment, advice: str = ""):
+        """Path A — route a dropped file into a content-appropriate subfolder of
+        the current channel and rename by content. Writes bytes directly to the
+        final path (no staging) and then runs `analyze_file` for PDF indexing
+        and a content summary. `advice` is optional steering text, non-empty
+        only when the user @mentioned the bot with a non-`.md` file."""
+        channel_name = message.channel.name
+        ext = os.path.splitext(attachment.filename)[1].lower()
+
+        raw_bytes = await attachment.read()
+        snippet = ""
+        if ext in self._TEXT_EXTS:
+            snippet = raw_bytes[:5000].decode("utf-8", errors="replace")
+
+        tree_listing = self.kb.list_channel_tree(channel_name)
+        subfolder, new_name = await self.agent.route_file(
+            filename=attachment.filename,
+            snippet=snippet,
+            tree_listing=tree_listing,
+            channel_name=channel_name,
+            advice=advice,
+        )
+        subfolder = self._sanitize_subfolder(channel_name, subfolder)
+        new_name = self._sanitize_filename(new_name, attachment.filename)
+
+        channel_path = self.kb.get_channel_path(channel_name)
+        final_dir = os.path.join(channel_path, subfolder) if subfolder else channel_path
+        os.makedirs(final_dir, exist_ok=True)
+        final_path = self._dedupe_path(os.path.join(final_dir, new_name))
+        with open(final_path, "wb") as f:
+            f.write(raw_bytes)
+
+        # Legacy side-effect: PDFs upload to PageIndex, text-ish files get an
+        # LLM summary. Runs on the final path so PageIndex caches correctly.
+        doc_id, analysis = await self.agent.analyze_file(final_path, self.kb.pageindex)
+        if doc_id:
+            logger.info(
+                f"**PAGEINDEX**: Indexed `{attachment.filename}` doc_id={doc_id}",
+                message.guild,
+            )
+
+        rel = os.path.relpath(final_path, channel_path)
+        commit_msg = await self.agent.generate_commit_message(
+            f"Ingested file into #{channel_name}: {rel}"
+        )
+        await asyncio.to_thread(self.kb.save_state, commit_msg)
+
+        summary_tail = f"\n> {analysis}" if analysis else ""
+        await self.send_message_safe(
+            message.channel,
+            f"✅ File ingested: `{attachment.filename}` → `{rel}`{summary_tail}",
+        )
+        logger.info(
+            f"**INGEST (FILE)**: `{attachment.filename}` → `{rel}` in #{channel_name}",
+            message.guild,
+        )
+
+    async def _handle_file_proposal(self, message, attachment, advice: str = ""):
+        """Path B — user @mentioned the bot with a `.md` drop. LLM decides whether
+        to merge into an existing KB file or create a new one, then generates the
+        content and surfaces it through the proposal UI. `advice` is optional
+        steering text and may be empty — the mention itself is the trigger."""
+        channel_name = message.channel.name
+
+        draft_content = (await attachment.read()).decode("utf-8", errors="replace")
+        if not draft_content.strip():
+            await message.channel.send(
+                f"⚠️ `{attachment.filename}` is empty — nothing to propose."
+            )
+            return
+
+        kb_context = await asyncio.to_thread(
+            self.kb.get_channel_context, channel_name, draft_content[:300]
+        )
+        tree_listing = self.kb.list_channel_tree(channel_name)
+
+        plan = await self.agent.plan_file_proposal(
+            draft_content=draft_content,
+            advice=advice,
+            kb_context=kb_context,
+            tree_listing=tree_listing,
+            channel_name=channel_name,
+        )
+        mode = plan["mode"]
+        target_rel = plan["target_rel_path"]
+        rationale = plan["rationale"]
+        channel_path = self.kb.get_channel_path(channel_name)
+
+        def _fallback_new_path() -> str:
+            subject = _slugify_subject(
+                _extract_title(draft_content) or attachment.filename.rsplit(".", 1)[0]
+            )
+            return f"NOTE-{datetime.date.today()}-{subject}.md"
+
+        # Validate target_rel — must be .md and stay inside the channel folder.
+        if not target_rel or not target_rel.endswith(".md"):
+            mode, target_rel = "new", _fallback_new_path()
+        candidate_abs = os.path.abspath(os.path.join(channel_path, target_rel))
+        channel_abs = os.path.abspath(channel_path)
+        if os.path.commonpath([candidate_abs, channel_abs]) != channel_abs:
+            logger.warning(f"file_proposal: rejected target_rel {target_rel!r} (escapes channel)")
+            mode, target_rel = "new", _fallback_new_path()
+            candidate_abs = os.path.abspath(os.path.join(channel_path, target_rel))
+
+        existing_content = ""
+        if mode == "update":
+            if os.path.exists(candidate_abs):
+                with open(candidate_abs, "r") as f:
+                    existing_content = f.read()
+            else:
+                logger.info(
+                    f"file_proposal: planned update target {target_rel!r} missing on disk; "
+                    "flipping to new"
+                )
+                mode, target_rel = "new", _fallback_new_path()
+
+        await message.channel.send(
+            f"💡 Generating proposal for `{attachment.filename}` → `{target_rel}` ({mode})..."
+        )
+
+        merged = await self.agent.merge_file_proposal(
+            draft_content=draft_content,
+            existing_content=existing_content,
+            advice=advice,
+            mode=mode,
+        )
+
+        # Sentinel escape: LLM rejects the update target after seeing fresh content.
+        if mode == "update" and merged.lstrip().startswith("NEW_FILE_INSTEAD"):
+            logger.info(f"file_proposal: merge rejected target {target_rel!r}; flipping to new")
+            merged = merged.lstrip()[len("NEW_FILE_INSTEAD"):].lstrip("\n") or draft_content
+            mode, existing_content, target_rel = "new", "", _fallback_new_path()
+
+        if not merged.strip():
+            await message.channel.send(
+                f"⚠️ Proposal generation returned empty content for `{attachment.filename}`."
+            )
+            return
+
+        pid = self._create_proposal(
+            channel_name=channel_name,
+            rel_path=target_rel,
+            existing_content=existing_content,
+            proposed_content=merged,
+            instruction=advice,
+            rationale=rationale,
+        )
+        await self._send_proposal(message.channel, pid)
+        logger.info(
+            f"**PROPOSE (FILE)**: `{attachment.filename}` -> `{target_rel}` ({mode}) in #{channel_name}",
+            message.guild,
+        )
 
     # --- HELPERS ---
 
@@ -814,22 +1042,32 @@ OUTPUT FORMAT (markdown):
             logger.info(f"**INGEST (URL)**: {message.content[:50]}... -> `{filename}`", message.guild)
 
         elif message.attachments:
-            await message.channel.send("📥 File detected. Ingesting to KB...")
+            # Mention is the explicit trigger for the heavy (reviewed) path.
+            # Without a mention, files are silently autorouted. Advice is the
+            # user's message minus the mention token — may be empty.
+            mentioned = self.user.mentioned_in(message)
+            advice = re.sub(r"<@!?\d+>", "", message.content).strip()
             for attachment in message.attachments:
-                file_path = os.path.join(channel_path, attachment.filename)
-                await attachment.save(file_path)
-
-                doc_id, analysis = await self.agent.analyze_file(file_path, self.kb.pageindex)
-                if doc_id:
-                    logger.info(f"**PAGEINDEX**: Indexed `{attachment.filename}` doc_id={doc_id}", message.guild)
-
-                commit_msg = await self.agent.generate_commit_message(
-                    f"Ingested file: {attachment.filename}"
-                )
-                await asyncio.to_thread(self.kb.save_state, commit_msg)
-                
-                await self.send_message_safe(message.channel, f"✅ File ingested: {attachment.filename}. Analysis: {analysis}")
-                logger.info(f"**INGEST (FILE)**: `{attachment.filename}` in {channel_name}", message.guild)
+                is_md = attachment.filename.lower().endswith((".md", ".markdown"))
+                if mentioned and is_md:
+                    await message.channel.send(
+                        f"✍️ Reviewed ingest for `{attachment.filename}` — preparing proposal..."
+                    )
+                    await self._handle_file_proposal(message, attachment, advice)
+                else:
+                    if mentioned:
+                        await message.channel.send(
+                            f"📥 `{attachment.filename}` — proposal flow is `.md`-only; "
+                            "routing with your advice as a hint..."
+                        )
+                    else:
+                        await message.channel.send(
+                            f"📥 `{attachment.filename}` — routing into KB by content..."
+                        )
+                    await self._handle_file_autoroute(
+                        message, attachment,
+                        advice=advice if mentioned else "",
+                    )
 
         # --- 3. PASSIVE DIALOGUE (thought recording + tool-augmented replies) ---
         else:
@@ -913,18 +1151,7 @@ OUTPUT FORMAT (markdown):
             # --- SEND PENDING PROPOSALS ---
             # We process any proposals queued by the propose_update tool this turn.
             for pid in proposal_ids:
-                proposal = self._pending_proposals.get(pid)
-                if not proposal:
-                    continue
-                
-                diff_text = _render_diff(
-                    proposal["existing_content"], 
-                    proposal["proposed_content"], 
-                    proposal["rel_path"]
-                )
-                body = _format_proposal_message(proposal["rel_path"], proposal["rationale"], diff_text)
-                view = ProposalView(self, pid)
-                await message.channel.send(content=body, view=view)
+                await self._send_proposal(message.channel, pid)
 
 
 def _preflight_check():

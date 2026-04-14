@@ -234,10 +234,33 @@ For structured KB maintenance (updating existing `.md` files, models, or researc
 | `!research [topic]` / `/research` | Deep-dive on topic using Viking + PageIndex context, git commit | `RESEARCH-<date>-<subject>.md` |
 | `!omni [query]` / `/omni` | Cross-KB synthesis across **all** channel folders (global Viking traversal), git commit | `OMNI-<date>-<subject>.md` |
 | URL in message | Fetches page, converts to Markdown snapshot, git commit | `WEBPAGE-<date>-<subject>.md` |
-| File attachment | Saves and semantically analyzes file (PDF via PageIndex, others via LLM), git commit | — |
+| File attachment (no @mention) | Content-routed ingestion: LLM picks a subfolder within the channel and renames by content, git commit | — |
+| File attachment (@mention + `.md`) | Reviewed ingest: LLM merges draft into an existing KB file or creates a new one; surfaces via the Apply/Discard/Refine proposal UI. Any extra text is optional steering advice. | — |
+| File attachment (@mention + non-`.md`) | Content-routed ingestion, but the mention text is threaded into the routing prompt as an advice hint | — |
 | Plain text | Passive dialogue: replies via tools-first KB retrieval + records insights via `record_thought` tool call | — |
 
 All output `.md` files are sent back to the Discord channel as Discord file attachments immediately after creation.
+
+### 8.1 File Drop Branching
+
+The `message.attachments` handler in `bot.py:on_message` uses a single predicate to pick its path: **did the user @mention the bot?** The mention is the explicit "I want this reviewed" signal. Without it, files are silently autorouted. The extra text the user typed (stripped of the mention token) becomes optional *advice* — never a trigger on its own.
+
+```
+mentioned = self.user.mentioned_in(message)
+advice    = re.sub(r"<@!?\d+>", "", message.content).strip()   # may be empty
+```
+
+| Case | Path | Behavior |
+| :--- | :--- | :--- |
+| No mention, any file | **Autoroute** (`_handle_file_autoroute`) | Read bytes via `attachment.read()`, build a content snippet (first 5000 bytes for text-ish files; filename only for PDFs/binaries), walk the channel folder for a tree listing, call `agent.route_file` for a `{subfolder, filename}` JSON verdict, sanitize against path traversal, write bytes to the final path (deduped on collision), run `analyze_file` for the PageIndex upload / LLM summary, then `save_state`. |
+| @mention + `.md`/`.markdown` | **Reviewed ingest** (`_handle_file_proposal`) | Read draft bytes into memory. `agent.plan_file_proposal` picks `mode: new\|update` and a `target_rel_path` using Viking KB context + the channel tree. `agent.merge_file_proposal` produces the final markdown — for updates, the model may emit the sentinel `NEW_FILE_INSTEAD` to escape to a new-file path if the target turns out to be a poor fit once the fresh disk content is in view. Result goes through `_create_proposal` + `_send_proposal`, reusing the existing `ProposalView` Apply/Discard/Refine UI. Apply performs the write + commit + index. Advice may be empty: the mention alone is enough to request review. |
+| @mention + non-`.md` | **Autoroute with advice** | Same as the no-mention autoroute, but the mention text is threaded into `agent.route_file`'s prompt as explicit steering. The proposal UI is `.md`-only because it relies on a readable text diff — for PDFs and binaries the mention still gets you content-aware placement with your words as a hint, just not a preview. |
+
+**Why mention-as-trigger rather than caption-as-trigger?** A caption-based branch conflates "user typed something" with "user wants review," which misfires in both directions: a casual `@bot here.md` with no extra text gets autorouted when the user clearly wanted attention, and a `here's my file lol` caption flips into the heavy path when the user just wanted quiet ingestion. A mention is an unambiguous, intentional signal that the bot should slow down and show its work.
+
+**PDFs route by filename signal alone.** `PageIndexManager` caches uploaded documents by absolute file path (`pageindex_manager.py`), so previewing a PDF's content would require uploading it. The routing LLM call operates on filename + user advice only; after the file lands at its final path, `analyze_file` runs the PageIndex upload exactly once at the correct location.
+
+**No staging.** The earlier design staged attachments in `/tmp` to avoid double-indexing through `save_state`'s untracked-file scan. That complexity is unnecessary: `attachment.read()` returns bytes in memory, and writing them directly to the final path means only one file ever hits disk. One path, one index.
 
 ---
 

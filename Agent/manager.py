@@ -174,3 +174,33 @@ class KnowledgeBaseManager:
         """Find untracked files on disk for the !organize command."""
         return self._repo.untracked_files
 
+    def list_channel_tree(self, channel_name: str, max_entries: int = 200) -> str:
+        """Flat listing of the channel's folder structure for LLM routing prompts.
+
+        Returns one relative path per line, directories first (with trailing /),
+        then files. Hidden paths are skipped. Truncates at `max_entries` with a
+        marker so prompts stay bounded on deep trees.
+        """
+        root = os.path.join(self.channels_path, channel_name)
+        if not os.path.isdir(root):
+            return "(empty channel)"
+        dirs: list[str] = []
+        files: list[str] = []
+        for dirpath, dirnames, filenames in os.walk(root):
+            dirnames[:] = sorted(d for d in dirnames if not d.startswith("."))
+            rel_dir = os.path.relpath(dirpath, root)
+            if rel_dir != ".":
+                dirs.append(rel_dir + "/")
+            for fn in sorted(filenames):
+                if fn.startswith("."):
+                    continue
+                rel_file = fn if rel_dir == "." else os.path.join(rel_dir, fn)
+                files.append(rel_file)
+        entries = dirs + files
+        truncated = len(entries) > max_entries
+        entries = entries[:max_entries]
+        out = "\n".join(entries) if entries else "(empty channel)"
+        if truncated:
+            out += f"\n... (truncated at {max_entries} entries)"
+        return out
+

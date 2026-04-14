@@ -351,6 +351,15 @@ class MindSpaceAgent:
         response = await self.brain.achat(system_ctx, [], user_message, tools=tools, mcp_sessions=mcp_sessions, on_progress=on_progress)
         return response.strip()
 
+    @staticmethod
+    def _read_text_snippet(file_path: str, max_chars: int = 5000) -> str:
+        """Best-effort read of the first N chars of a text-ish file. Empty on failure."""
+        try:
+            with open(file_path, "r", errors="ignore") as f:
+                return f.read(max_chars)
+        except Exception:
+            return ""
+
     async def analyze_file(self, file_path: str, pageindex) -> tuple:
         ext = os.path.splitext(file_path)[1].lower()
         channel_name = os.path.basename(os.path.dirname(file_path))
@@ -365,12 +374,169 @@ class MindSpaceAgent:
                 return doc_id, await self.brain.run_command_async(prompt)
             except Exception:
                 pass
-        try:
-            with open(file_path, "r", errors="ignore") as f:
-                raw = f.read(5000)
-        except Exception:
-            raw = ""
+        raw = self._read_text_snippet(file_path)
         return None, await self.brain.run_command_async(f"Analyze this file content and summarize it:\n\n{raw}")
+
+    @staticmethod
+    def _extract_json(text: str) -> dict:
+        """Parse a JSON object out of an LLM response, tolerating ``` fences
+        and trailing prose. Returns {} on failure."""
+        if not text:
+            return {}
+        text = text.strip()
+        # Strip markdown code fences if present.
+        if text.startswith("```"):
+            text = text.split("\n", 1)[1] if "\n" in text else text[3:]
+            if text.endswith("```"):
+                text = text[:-3]
+            text = text.strip()
+        # Grab the first {...} block so stray prose around JSON is ignored.
+        start = text.find("{")
+        end = text.rfind("}")
+        if start == -1 or end == -1 or end < start:
+            return {}
+        try:
+            return json.loads(text[start:end + 1])
+        except json.JSONDecodeError:
+            return {}
+
+    async def route_file(self, filename: str, snippet: str, tree_listing: str,
+                          channel_name: str, advice: str = "") -> tuple[str, str]:
+        """Decide the target subfolder and renamed filename for a dropped file.
+
+        Returns (subfolder, new_filename). The subfolder is relative to the
+        channel folder (empty string means channel root). Falls back to
+        ("", filename) on any LLM / parse error — the caller still sanitizes.
+        `advice` is optional free-text steering from the user (non-empty only
+        when they @mentioned the bot with a non-md file).
+        """
+        ext = os.path.splitext(filename)[1].lower()
+        advice_block = f"USER ADVICE (steering from the @mention): {advice}\n\n" if advice else ""
+        prompt = (
+            f"You are organizing a file dropped into the Discord channel #{channel_name} "
+            f"of a knowledge base. Pick the correct subfolder within the channel folder "
+            f"and a content-based filename.\n\n"
+            f"{advice_block}"
+            f"ORIGINAL FILENAME: {filename}\n"
+            f"FILE EXTENSION: {ext or '(none)'}\n\n"
+            f"CHANNEL FOLDER CONTENTS (relative paths, '/' = directory):\n"
+            f"{tree_listing}\n\n"
+            f"FILE CONTENT PREVIEW (may be empty for binary files):\n"
+            f"---\n{snippet or '(no preview available — use filename as hint)'}\n---\n\n"
+            f"RULES:\n"
+            f"- subfolder is RELATIVE to the channel folder. Use '' (empty) for channel root.\n"
+            f"- Prefer reusing an existing subfolder from the listing over inventing a new one.\n"
+            f"- filename MUST preserve the original extension ({ext or 'any'}).\n"
+            f"- Follow the TYPE-DATE-SUBJECT convention where possible. Use kebab-case. "
+            f"Date format: YYYY-MM-DD. Example: NOTE-2026-04-14-grpo-vs-ppo.md\n"
+            f"- Do NOT include path separators in the filename.\n"
+            f"- If USER ADVICE is present, let it override content-based guesses.\n\n"
+            f"Respond with STRICT JSON only — no prose, no code fences:\n"
+            f'{{"subfolder": "...", "filename": "..."}}'
+        )
+        try:
+            raw = await self.brain.run_command_async(prompt)
+            data = self._extract_json(raw)
+            subfolder = str(data.get("subfolder", "")).strip()
+            new_name = str(data.get("filename", "")).strip()
+            if not new_name:
+                return "", filename
+            return subfolder, new_name
+        except Exception as e:
+            logger.warning(f"route_file: LLM/parse failure ({e}); falling back to original name")
+            return "", filename
+
+    async def plan_file_proposal(self, draft_content: str, advice: str,
+                                  kb_context: str, tree_listing: str,
+                                  channel_name: str) -> dict:
+        """First stage of Path B — decide whether the dropped .md should update
+        an existing KB file or land as a new one. Returns a dict with keys
+        `mode` ("new"|"update"), `target_rel_path`, `rationale`. Falls back to
+        a "new" verdict with a content-derived path on any error.
+        `advice` may be empty: the user @mentioned the bot without extra text,
+        requesting a review-before-save without specific steering."""
+        if advice:
+            advice_block = f"USER ADVICE: {advice}\n\n"
+        else:
+            advice_block = (
+                "USER ADVICE: (none — the user @mentioned the bot without extra text, "
+                "requesting a reviewed save. Infer intent from the draft and the channel "
+                "structure.)\n\n"
+            )
+        prompt = (
+            f"A user dropped a markdown draft into Discord channel #{channel_name} and asked "
+            f"for a reviewed save. Decide whether to MERGE the draft into an existing KB "
+            f"file, or save it as a NEW file.\n\n"
+            f"{advice_block}"
+            f"DROPPED DRAFT (first section):\n---\n{draft_content[:4000]}\n---\n\n"
+            f"CHANNEL KB SEMANTIC CONTEXT (what's already indexed):\n{kb_context or '(empty)'}\n\n"
+            f"CHANNEL FOLDER LAYOUT:\n{tree_listing}\n\n"
+            f"RULES:\n"
+            f"- Pick mode='update' ONLY if there is a clearly-matching existing file whose "
+            f"topic overlaps the draft and where merging makes editorial sense.\n"
+            f"- Otherwise pick mode='new'.\n"
+            f"- target_rel_path is relative to the channel folder, must end in .md, and for "
+            f"'new' should follow TYPE-DATE-SUBJECT kebab-case (e.g. NOTE-2026-04-14-topic.md) "
+            f"placed in an appropriate subfolder from the layout (or channel root if none fit).\n"
+            f"- rationale is one short sentence, shown to the user.\n\n"
+            f"Respond with STRICT JSON only — no prose, no code fences:\n"
+            f'{{"mode": "new|update", "target_rel_path": "...", "rationale": "..."}}'
+        )
+        try:
+            raw = await self.brain.run_command_async(prompt)
+            data = self._extract_json(raw)
+            mode = data.get("mode", "new")
+            if mode not in ("new", "update"):
+                mode = "new"
+            path = str(data.get("target_rel_path", "")).strip()
+            rationale = str(data.get("rationale", "")).strip() or "User-submitted draft transformed per instruction."
+            if not path:
+                return {"mode": "new", "target_rel_path": "", "rationale": rationale}
+            return {"mode": mode, "target_rel_path": path, "rationale": rationale}
+        except Exception as e:
+            logger.warning(f"plan_file_proposal: LLM/parse failure ({e})")
+            return {"mode": "new", "target_rel_path": "", "rationale": "User-submitted draft."}
+
+    async def merge_file_proposal(self, draft_content: str, existing_content: str,
+                                    advice: str, mode: str) -> str:
+        """Second stage of Path B — produce the final markdown. For `mode='update'`,
+        the prompt allows the model to abort with sentinel `NEW_FILE_INSTEAD\\n...`
+        if the target turns out to be a poor fit after seeing the fresh content.
+        Caller handles the sentinel. `advice` may be empty."""
+        if advice:
+            advice_block = f"USER ADVICE: {advice}\n\n"
+        else:
+            advice_block = (
+                "USER ADVICE: (none — treat the draft as-is, clean it up lightly, and "
+                "save/merge without aggressive rewriting.)\n\n"
+            )
+        if mode == "update":
+            prompt = (
+                f"You are merging a user-submitted markdown draft into an existing Knowledge "
+                f"Base file.\n\n"
+                f"{advice_block}"
+                f"DROPPED DRAFT:\n---\n{draft_content}\n---\n\n"
+                f"EXISTING TARGET FILE:\n---\n{existing_content}\n---\n\n"
+                f"TASK:\n"
+                f"- Produce the complete, final markdown for the target file after applying the merge.\n"
+                f"- Preserve the existing tone, structure, and headings where sensible.\n"
+                f"- If after reading BOTH the draft AND the existing file you believe the draft "
+                f"does NOT belong in this target (topic mismatch, would corrupt structure), "
+                f"return the literal first line `NEW_FILE_INSTEAD` followed by a newline and then "
+                f"the cleaned-up draft — the caller will save it as a new file instead.\n"
+                f"- Otherwise, output ONLY the merged markdown document. No commentary."
+            )
+        else:
+            prompt = (
+                f"You are saving a user-submitted markdown draft as a new Knowledge Base file.\n\n"
+                f"{advice_block}"
+                f"DROPPED DRAFT:\n---\n{draft_content}\n---\n\n"
+                f"TASK:\n"
+                f"- Produce the complete, final markdown for the new file.\n"
+                f"- Keep a clear H1 title. Use standard markdown conventions.\n"
+                f"- Output ONLY the complete markdown document. No commentary."
+            )
+        return await self.brain.run_command_async(prompt)
 
     async def process_url(self, url, channel_name):
         import httpx
