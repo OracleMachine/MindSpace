@@ -351,6 +351,16 @@ class MindSpaceAgent:
         response = await self.brain.achat(system_ctx, [], user_message, tools=tools, mcp_sessions=mcp_sessions, on_progress=on_progress)
         return response.strip()
 
+    _TEXT_EXTS = {
+        ".md", ".markdown", ".txt", ".rst", ".json", ".yaml", ".yml",
+        ".toml", ".csv", ".tsv", ".log", ".py", ".js", ".ts",
+    }
+
+    @classmethod
+    def is_text_ext(cls, ext: str) -> bool:
+        """True if the extension names a text-ish file we can preview."""
+        return ext.lower() in cls._TEXT_EXTS
+
     @staticmethod
     def _read_text_snippet(file_path: str, max_chars: int = 5000) -> str:
         """Best-effort read of the first N chars of a text-ish file. Empty on failure."""

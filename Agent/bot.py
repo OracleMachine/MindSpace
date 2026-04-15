@@ -9,6 +9,7 @@ import functools
 import git
 import uuid
 import inspect
+import pathlib
 from discord import app_commands
 
 # CRITICAL: Suppress litellm background logging workers BEFORE they can start.
@@ -165,6 +166,15 @@ from logger import logger
 import mcp_bridge
 
 class MindSpaceBot(discord.Client):
+    # Reserved channels are auto-created on startup and never processed by
+    # on_message. Each value is the init greeting posted on first creation.
+    RESERVED_CHANNELS = {
+        "system-log": "🚀 **MindSpace System Log Initialized.**",
+        "notification": "🔔 **MindSpace Notification Channel Initialized.**",
+    }
+
+    HELP_TEXT = (pathlib.Path(__file__).parent / "help.md").read_text(encoding="utf-8")
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.agent = None  # initialized in setup_hook (inside the event loop)
@@ -213,6 +223,15 @@ class MindSpaceBot(discord.Client):
             await interaction.response.defer(thinking=True)
             await self.handle_omni(interaction.channel, interaction.guild, query, interaction.id)
 
+        @self.tree.command(name="help", description="Post the MindSpace usage guide to #notification.")
+        async def cmd_help(interaction: discord.Interaction):
+            await interaction.response.defer(ephemeral=True, thinking=False)
+            channel = await self.handle_help(interaction.guild)
+            target = channel.mention if channel else "`#notification`"
+            await interaction.followup.send(
+                f"📬 Help posted to {target}.", ephemeral=True
+            )
+
     async def on_ready(self):
         if not self.guilds:
             logger.warning("Bot is not in any guilds.")
@@ -243,8 +262,8 @@ class MindSpaceBot(discord.Client):
         logger.info(f'Logged in as {self.user} (ID: {self.user.id})')
         logger.info('------')
 
-        logger.info("Startup: ensuring #system-log channel...")
-        await self._ensure_system_log(guild)
+        logger.info("Startup: ensuring reserved channels...")
+        await self._ensure_reserved_channels(guild)
         logger.info("Startup: syncing KB folders → Discord channels...")
         await self._sync_kb_channels(guild)
 
@@ -256,7 +275,7 @@ class MindSpaceBot(discord.Client):
         logger.info(f"Startup: all indexing complete — bot fully ready (Agent: {agent_git} Thought: {thought_git})")
 
         for channel in guild.text_channels:
-            if channel.name != "system-log":
+            if channel.name not in self.RESERVED_CHANNELS:
                 await self._seed_channel_history(channel)
 
     # --- CORE COMMAND LOGIC (Agnostic to Trigger) ---
@@ -577,6 +596,16 @@ OUTPUT FORMAT (markdown):
         await channel.send(f"✅ Omni search complete.", file=discord.File(file_path))
         logger.info(f"**OMNI**: {query}", guild)
 
+    async def handle_help(self, guild):
+        """Post the usage guide to #notification. Returns the channel (or None)."""
+        channel = await self._ensure_channel(
+            guild, "notification", self.RESERVED_CHANNELS["notification"]
+        )
+        if channel:
+            await self.send_message_safe(channel, self.HELP_TEXT)
+            logger.info("**HELP**: posted usage guide to #notification", guild)
+        return channel
+
     async def handle_sync(self, channel, guild):
         """Manually trigger a native directory sync for the current channel."""
         channel_name = channel.name
@@ -675,39 +704,33 @@ OUTPUT FORMAT (markdown):
 
     # --- FILE DROP HANDLERS ---
 
-    _TEXT_EXTS = {
-        ".md", ".markdown", ".txt", ".rst", ".json", ".yaml", ".yml",
-        ".toml", ".csv", ".tsv", ".log", ".py", ".js", ".ts",
-    }
-
     def _sanitize_subfolder(self, channel_name: str, subfolder: str) -> str:
-        """Reject path traversal and absolute paths. Returns a safe subfolder
-        relative to the channel folder, or '' on rejection."""
+        """Return a safe subfolder relative to the channel folder, or '' on
+        rejection. `commonpath` catches traversal, absolute paths, and symlinks
+        in one check — no need for string-level `..` filtering first."""
         if not subfolder:
             return ""
         sub = subfolder.strip().strip("/")
-        if not sub or os.path.isabs(sub) or ".." in sub.split(os.sep) or ".." in sub.split("/"):
-            logger.warning(f"autoroute: rejected subfolder {subfolder!r} (traversal/absolute)")
+        if not sub:
             return ""
         channel_abs = os.path.abspath(os.path.join(self.kb.channels_path, channel_name))
         target_abs = os.path.abspath(os.path.join(channel_abs, sub))
-        if os.path.commonpath([target_abs, channel_abs]) != channel_abs:
-            logger.warning(f"autoroute: rejected subfolder {subfolder!r} (escapes channel)")
+        try:
+            if os.path.commonpath([target_abs, channel_abs]) != channel_abs:
+                logger.warning(f"autoroute: rejected subfolder {subfolder!r} (escapes channel)")
+                return ""
+        except ValueError:
+            # commonpath raises on absolute paths with different drives (Windows)
+            logger.warning(f"autoroute: rejected subfolder {subfolder!r} (commonpath failed)")
             return ""
         return sub
 
     def _sanitize_filename(self, filename: str, fallback: str) -> str:
-        """Strip path separators and hidden-file prefixes. Preserve the
-        fallback's extension if the LLM dropped it."""
+        """Strip path separators and hidden-file prefixes."""
         if not filename:
             return fallback
         name = os.path.basename(filename).lstrip(".")
-        if not name:
-            return fallback
-        fb_ext = os.path.splitext(fallback)[1]
-        if fb_ext and not os.path.splitext(name)[1]:
-            name = name + fb_ext
-        return name
+        return name or fallback
 
     def _dedupe_path(self, abs_path: str) -> str:
         """If abs_path exists, append -2, -3, ... before the extension until free."""
@@ -732,7 +755,7 @@ OUTPUT FORMAT (markdown):
 
         raw_bytes = await attachment.read()
         snippet = ""
-        if ext in self._TEXT_EXTS:
+        if self.agent.is_text_ext(ext):
             snippet = raw_bytes[:5000].decode("utf-8", errors="replace")
 
         tree_listing = self.kb.list_channel_tree(channel_name)
@@ -778,6 +801,51 @@ OUTPUT FORMAT (markdown):
             message.guild,
         )
 
+    def _proposal_fallback_path(self, draft_content: str, attachment_name: str) -> str:
+        """Content-derived new-file path used whenever the planner's target is
+        unusable (empty, non-`.md`, escapes channel, or missing on disk)."""
+        subject = _slugify_subject(
+            _extract_title(draft_content) or attachment_name.rsplit(".", 1)[0]
+        )
+        return f"NOTE-{datetime.date.today()}-{subject}.md"
+
+    def _resolve_proposal_target(self, channel_path: str, plan: dict,
+                                 draft_content: str, attachment_name: str
+                                 ) -> tuple[str, str, str]:
+        """Validate the planner's target and resolve `existing_content`. Falls
+        back to a content-derived new-file path on any validation failure.
+        Returns (mode, target_rel, existing_content)."""
+        mode = plan["mode"]
+        target_rel = plan["target_rel_path"]
+        channel_abs = os.path.abspath(channel_path)
+
+        def _fallback() -> tuple[str, str, str]:
+            return "new", self._proposal_fallback_path(draft_content, attachment_name), ""
+
+        if not target_rel or not target_rel.endswith(".md"):
+            return _fallback()
+
+        candidate_abs = os.path.abspath(os.path.join(channel_path, target_rel))
+        try:
+            if os.path.commonpath([candidate_abs, channel_abs]) != channel_abs:
+                logger.warning(f"file_proposal: rejected target_rel {target_rel!r} (escapes channel)")
+                return _fallback()
+        except ValueError:
+            logger.warning(f"file_proposal: rejected target_rel {target_rel!r} (commonpath failed)")
+            return _fallback()
+
+        if mode == "update":
+            if not os.path.exists(candidate_abs):
+                logger.info(
+                    f"file_proposal: planned update target {target_rel!r} missing on disk; "
+                    "flipping to new"
+                )
+                return _fallback()
+            with open(candidate_abs, "r") as f:
+                return "update", target_rel, f.read()
+
+        return "new", target_rel, ""
+
     async def _handle_file_proposal(self, message, attachment, advice: str = ""):
         """Path B — user @mentioned the bot with a `.md` drop. LLM decides whether
         to merge into an existing KB file or create a new one, then generates the
@@ -804,38 +872,11 @@ OUTPUT FORMAT (markdown):
             tree_listing=tree_listing,
             channel_name=channel_name,
         )
-        mode = plan["mode"]
-        target_rel = plan["target_rel_path"]
-        rationale = plan["rationale"]
         channel_path = self.kb.get_channel_path(channel_name)
-
-        def _fallback_new_path() -> str:
-            subject = _slugify_subject(
-                _extract_title(draft_content) or attachment.filename.rsplit(".", 1)[0]
-            )
-            return f"NOTE-{datetime.date.today()}-{subject}.md"
-
-        # Validate target_rel — must be .md and stay inside the channel folder.
-        if not target_rel or not target_rel.endswith(".md"):
-            mode, target_rel = "new", _fallback_new_path()
-        candidate_abs = os.path.abspath(os.path.join(channel_path, target_rel))
-        channel_abs = os.path.abspath(channel_path)
-        if os.path.commonpath([candidate_abs, channel_abs]) != channel_abs:
-            logger.warning(f"file_proposal: rejected target_rel {target_rel!r} (escapes channel)")
-            mode, target_rel = "new", _fallback_new_path()
-            candidate_abs = os.path.abspath(os.path.join(channel_path, target_rel))
-
-        existing_content = ""
-        if mode == "update":
-            if os.path.exists(candidate_abs):
-                with open(candidate_abs, "r") as f:
-                    existing_content = f.read()
-            else:
-                logger.info(
-                    f"file_proposal: planned update target {target_rel!r} missing on disk; "
-                    "flipping to new"
-                )
-                mode, target_rel = "new", _fallback_new_path()
+        mode, target_rel, existing_content = self._resolve_proposal_target(
+            channel_path, plan, draft_content, attachment.filename
+        )
+        rationale = plan["rationale"]
 
         await message.channel.send(
             f"💡 Generating proposal for `{attachment.filename}` → `{target_rel}` ({mode})..."
@@ -852,7 +893,8 @@ OUTPUT FORMAT (markdown):
         if mode == "update" and merged.lstrip().startswith("NEW_FILE_INSTEAD"):
             logger.info(f"file_proposal: merge rejected target {target_rel!r}; flipping to new")
             merged = merged.lstrip()[len("NEW_FILE_INSTEAD"):].lstrip("\n") or draft_content
-            mode, existing_content, target_rel = "new", "", _fallback_new_path()
+            target_rel = self._proposal_fallback_path(draft_content, attachment.filename)
+            mode, existing_content = "new", ""
 
         if not merged.strip():
             await message.channel.send(
@@ -882,7 +924,7 @@ OUTPUT FORMAT (markdown):
         root = config.Paths.CHANNELS
         try:
             for entry in os.scandir(root):
-                if not entry.is_dir() or entry.name.startswith(".") or entry.name == "system-log":
+                if not entry.is_dir() or entry.name.startswith(".") or entry.name in self.RESERVED_CHANNELS:
                     continue
                 channel_name = entry.name
                 self.kb.get_channel_path(channel_name)  # ensure stream_of_conscious.md exists
@@ -954,22 +996,31 @@ OUTPUT FORMAT (markdown):
             return
 
         self.kb = KnowledgeBaseManager(guild.name)
-        await self._ensure_system_log(guild)
+        await self._ensure_reserved_channels(guild)
 
-    async def _ensure_system_log(self, guild):
-        """Ensure a #system-log channel exists in the guild."""
-        channel = discord.utils.get(guild.text_channels, name="system-log")
+    async def _ensure_channel(self, guild, name: str, init_message: str | None = None):
+        """Ensure a named text channel exists. Returns the channel (or None on
+        failure). Posts `init_message` only when the channel is first created."""
+        channel = discord.utils.get(guild.text_channels, name=name)
         if not channel:
             try:
-                channel = await guild.create_text_channel("system-log")
-                await channel.send("🚀 **MindSpace System Log Initialized.**")
+                channel = await guild.create_text_channel(name)
+                if init_message:
+                    await channel.send(init_message)
             except Exception as e:
-                logger.error(f"Error creating system-log in {guild.name}: {e}")
+                logger.error(f"Error creating #{name} in {guild.name}: {e}")
         return channel
+
+    async def _ensure_reserved_channels(self, guild):
+        """Ensure every RESERVED_CHANNELS entry exists in the guild."""
+        for name, greeting in self.RESERVED_CHANNELS.items():
+            await self._ensure_channel(guild, name, greeting)
 
     async def send_system_log(self, guild, message):
         """Internal method for logger to send to Discord."""
-        channel = await self._ensure_system_log(guild)
+        channel = await self._ensure_channel(
+            guild, "system-log", self.RESERVED_CHANNELS["system-log"]
+        )
         if channel:
             await channel.send(message)
 
@@ -996,6 +1047,8 @@ OUTPUT FORMAT (markdown):
             return
 
         channel_name = message.channel.name
+        if channel_name in self.RESERVED_CHANNELS:
+            return
         channel_path = self.kb.get_channel_path(channel_name)
 
         # --- 1. ACTIVE COMMANDS (! prefix — parity with slash commands) ---
@@ -1023,6 +1076,17 @@ OUTPUT FORMAT (markdown):
                     await message.channel.send("Usage: `!sync` (takes no arguments)")
                     return
                 await self.handle_sync(message.channel, message.guild)
+            elif cmd == "help":
+                # Delete the invocation first so working channels stay clean;
+                # the actual help content lands in #notification.
+                try:
+                    await message.delete()
+                except (discord.Forbidden, discord.NotFound):
+                    logger.warning(
+                        "Could not delete !help invocation "
+                        "(missing Manage Messages permission?)"
+                    )
+                await self.handle_help(message.guild)
             return
 
         # --- 2. KNOWLEDGE INGESTION (URLs / file attachments) ---
