@@ -77,8 +77,11 @@ class VikingContextManager:
         try:
             # OpenViking walks the dir and uses local CPU hashes to skip unchanged files (0 tokens).
             # We exclude files based on config (typically PDFs, as they are handled by PageIndex).
-            # config.Storage.IGNORED_EXTENSIONS is now dot-less (e.g. ['pdf', 'jpg'])
-            exclude_patterns = [f"*.{ext}" for ext in config.Storage.IGNORED_EXTENSIONS]
+            # `exclude` must be a comma-separated string — openviking's _parse_patterns
+            # calls .strip()/.split(",") on it directly, so passing a list crashes.
+            exclude_patterns = ",".join(
+                f"*.{ext}" for ext in config.Storage.IGNORED_EXTENSIONS
+            )
             self.client.add_resource(path=target_path, parent=parent_uri, exclude=exclude_patterns)
             self.client.wait_processed()
             logger.info(f"OpenViking: Sync complete for {target_path}")
