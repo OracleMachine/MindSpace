@@ -1,6 +1,7 @@
 import discord
 import os
 import re
+import io
 import datetime
 import difflib
 import config
@@ -32,15 +33,47 @@ def _render_diff(existing: str, proposed: str, file_path: str) -> str:
     ))
 
 
-def _format_proposal_message(rel_path: str, rationale: str, diff_text: str) -> str:
-    if len(diff_text) > 1500:
-        # Truncate at a line boundary to prevent splitting UTF8/diff markers
-        diff_text = diff_text[:1497].rsplit('\n', 1)[0] + "\n... (truncated)"
-    return (
+_DIFF_EMBED_LIMIT = 4000  # headroom under Discord's 4096-char embed description cap
+
+
+def _format_proposal_message(rel_path: str, rationale: str, diff_text: str):
+    """Build a proposal message payload.
+
+    Returns `(content, embed, file)` where:
+      - `content` is the short header line (always visible in the feed).
+      - `embed` carries the diff in its description — up to ~4 KB inline,
+        roughly 2.7× what the previous single-message code fence allowed.
+      - `file` is a `discord.File` with the *complete* diff, attached when
+        even the embed limit forces truncation. `None` otherwise.
+
+    Callers should pass all three fields to `send(...)` / the edit equivalent
+    so nothing gets lost on long updates.
+    """
+    content = (
         f"\U0001f4a1 **KB Update Proposal for `{rel_path}`**\n"
-        f"> {rationale}\n\n"
-        f"```diff\n{diff_text}\n```"
+        f"> {rationale}"
     )
+
+    fence_overhead = len("```diff\n\n```")
+    inline_limit = _DIFF_EMBED_LIMIT - fence_overhead
+
+    attachment = None
+    if len(diff_text) > inline_limit:
+        marker = "\n... (truncated — full diff attached)"
+        cut = inline_limit - len(marker)
+        preview = diff_text[:cut].rsplit("\n", 1)[0] + marker
+        safe_name = rel_path.replace("/", "_").replace("\\", "_") + ".diff"
+        attachment = discord.File(
+            io.BytesIO(diff_text.encode("utf-8")), filename=safe_name
+        )
+    else:
+        preview = diff_text
+
+    embed = discord.Embed(
+        description=f"```diff\n{preview}\n```",
+        color=0x3498db,
+    )
+    return content, embed, attachment
 
 
 class ProposalView(discord.ui.View):
@@ -136,9 +169,19 @@ TASK:
 
         proposal["proposed_content"] = revised
         diff_text = _render_diff(proposal["existing_content"], revised, proposal["rel_path"])
-        body = _format_proposal_message(proposal["rel_path"], proposal["rationale"], diff_text)
+        content, embed, file = _format_proposal_message(
+            proposal["rel_path"], proposal["rationale"], diff_text
+        )
         view = ProposalView(self.proposal_view.bot, self.proposal_view.proposal_id)
-        await interaction.edit_original_response(content=body, view=view)
+        # `attachments=[...]` fully replaces the prior attachments — pass the
+        # refined diff file if it still overflows, or clear any stale file when
+        # the refined diff fits inline.
+        await interaction.edit_original_response(
+            content=content,
+            embed=embed,
+            attachments=[file] if file is not None else [],
+            view=view,
+        )
 
 
 def _slugify_subject(text: str, max_len: int = 50) -> str:
@@ -645,9 +688,14 @@ OUTPUT FORMAT (markdown):
             proposal["proposed_content"],
             proposal["rel_path"],
         )
-        body = _format_proposal_message(proposal["rel_path"], proposal["rationale"], diff_text)
+        content, embed, file = _format_proposal_message(
+            proposal["rel_path"], proposal["rationale"], diff_text
+        )
         view = ProposalView(self, proposal_id)
-        await channel.send(content=body, view=view)
+        send_kwargs = {"content": content, "embed": embed, "view": view}
+        if file is not None:
+            send_kwargs["file"] = file
+        await channel.send(**send_kwargs)
 
     async def handle_propose_update(self, channel_name: str, rel_path: str, instruction: str, rationale: str):
         """Callback triggered by the propose_update tool.
