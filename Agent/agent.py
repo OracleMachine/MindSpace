@@ -75,7 +75,7 @@ class GoogleGenAIBrain(LLMBrain):
                 model=self.model,
                 contents=full_prompt
             )
-            return response.text.strip()
+            return (response.text or "").strip()
         except Exception as e:
             raise Exception(f"Google GenAI SDK Error: {str(e)}")
 
@@ -87,7 +87,7 @@ class GoogleGenAIBrain(LLMBrain):
                 model=self.model,
                 contents=full_prompt
             )
-            return response.text.strip()
+            return (response.text or "").strip()
         except Exception as e:
             raise Exception(f"Google GenAI SDK Async Error: {str(e)}")
 
@@ -106,7 +106,7 @@ class GoogleGenAIBrain(LLMBrain):
                 contents=contents,
                 config=self._build_config(system_ctx, tools),
             )
-            return response.text.strip()
+            return (response.text or "").strip()
         except Exception as e:
             raise Exception(f"Google GenAI SDK Error: {str(e)}")
 
@@ -133,7 +133,7 @@ class GoogleGenAIBrain(LLMBrain):
                 contents=contents,
                 config=self._build_config(system_ctx, combined_tools),
             )
-            return response.text.strip()
+            return (response.text or "").strip()
         except Exception as e:
             raise Exception(f"Google GenAI SDK Error: {str(e)}")
 
