@@ -44,8 +44,31 @@ class GoogleGenAIBrain(LLMBrain):
     def close(self):
         self.client.close()
 
+    @staticmethod
+    def _build_run_prompt(instruction: str, context: str = None) -> str:
+        return f"System Context:\n{context}\n\nUser Message: {instruction}" if context else instruction
+
+    @staticmethod
+    def _build_contents(history: list, message: str) -> list:
+        contents = []
+        for role, content in history:
+            gemini_role = "model" if role == "assistant" else "user"
+            contents.append({"role": gemini_role, "parts": [{"text": content}]})
+        contents.append({"role": "user", "parts": [{"text": message}]})
+        return contents
+
+    @staticmethod
+    def _build_config(system_ctx: str, tools: list):
+        kwargs = {}
+        if system_ctx:
+            kwargs["system_instruction"] = system_ctx
+        if tools:
+            kwargs["tools"] = tools
+            kwargs["automatic_function_calling"] = types.AutomaticFunctionCallingConfig(disable=False)
+        return types.GenerateContentConfig(**kwargs) if kwargs else None
+
     def run_command(self, instruction: str, context: str = None) -> str:
-        full_prompt = f"System Context:\n{context}\n\nUser Message: {instruction}" if context else instruction
+        full_prompt = self._build_run_prompt(instruction, context)
         logger.debug(f"GoogleGenAI.run_command prompt ({len(full_prompt)} chars):\n{full_prompt}")
         try:
             response = self.client.models.generate_content(
@@ -57,7 +80,7 @@ class GoogleGenAIBrain(LLMBrain):
             raise Exception(f"Google GenAI SDK Error: {str(e)}")
 
     async def run_command_async(self, instruction: str, context: str = None) -> str:
-        full_prompt = f"System Context:\n{context}\n\nUser Message: {instruction}" if context else instruction
+        full_prompt = self._build_run_prompt(instruction, context)
         logger.debug(f"GoogleGenAI.run_command_async prompt ({len(full_prompt)} chars):\n{full_prompt}")
         try:
             response = await self.client.aio.models.generate_content(
@@ -76,45 +99,28 @@ class GoogleGenAIBrain(LLMBrain):
             + "\n".join(f"[{r}] {c}" for r, c in history)
             + f"\n--- message ---\n{message}"
         )
-        contents = []
-        for role, content in history:
-            gemini_role = "model" if role == "assistant" else "user"
-            contents.append({"role": gemini_role, "parts": [{"text": content}]})
-        contents.append({"role": "user", "parts": [{"text": message}]})
+        contents = self._build_contents(history, message)
         try:
-            kwargs = {}
-            if system_ctx:
-                kwargs["system_instruction"] = system_ctx
-            if tools:
-                kwargs["tools"] = tools
-                kwargs["automatic_function_calling"] = types.AutomaticFunctionCallingConfig(disable=False)
-
-            cfg = types.GenerateContentConfig(**kwargs) if kwargs else None
             response = self.client.models.generate_content(
                 model=self.model,
                 contents=contents,
-                config=cfg
+                config=self._build_config(system_ctx, tools),
             )
             return response.text.strip()
         except Exception as e:
             raise Exception(f"Google GenAI SDK Error: {str(e)}")
 
     async def achat(self, system_ctx: str, history: list, message: str,
-                    tools: list = None, mcp_sessions: list = None, on_progress=None) -> str:
+                    tools: list = None, mcp_sessions: list = None) -> str:
         """Async multi-turn call. MCP sessions are passed straight through —
-        google-genai handles tool discovery + dispatch on ClientSession objects via AFC.
-        `on_progress` is not used here; progress is emitted by tool wrappers at the call site."""
+        google-genai handles tool discovery + dispatch on ClientSession objects via AFC."""
         logger.debug(
             f"GoogleGenAI.achat system_ctx ({len(system_ctx or '')} chars):\n{system_ctx}\n"
             f"--- history ({len(history)} turns) ---\n"
             + "\n".join(f"[{r}] {c}" for r, c in history)
             + f"\n--- message ---\n{message}"
         )
-        contents = []
-        for role, content in history:
-            gemini_role = "model" if role == "assistant" else "user"
-            contents.append({"role": gemini_role, "parts": [{"text": content}]})
-        contents.append({"role": "user", "parts": [{"text": message}]})
+        contents = self._build_contents(history, message)
 
         combined_tools = list(tools or [])
         if mcp_sessions:
@@ -122,18 +128,10 @@ class GoogleGenAIBrain(LLMBrain):
             combined_tools.extend(mcp_sessions.values())
 
         try:
-            kwargs = {}
-            if system_ctx:
-                kwargs["system_instruction"] = system_ctx
-            if combined_tools:
-                kwargs["tools"] = combined_tools
-                kwargs["automatic_function_calling"] = types.AutomaticFunctionCallingConfig(disable=False)
-
-            cfg = types.GenerateContentConfig(**kwargs) if kwargs else None
             response = await self.client.aio.models.generate_content(
                 model=self.model,
                 contents=contents,
-                config=cfg
+                config=self._build_config(system_ctx, combined_tools),
             )
             return response.text.strip()
         except Exception as e:
@@ -300,7 +298,7 @@ class MindSpaceAgent:
         if callable(close_fn):
             close_fn()
 
-    async def engage_dialogue(self, user_message, channel_name, history: str = "", tools: list = None, mcp_sessions: list = None, on_progress=None):
+    async def engage_dialogue(self, user_message, channel_name, history: str = "", tools: list = None, mcp_sessions: list = None):
         system_parts = [f"You are a knowledge agent in Discord channel #{channel_name}."]
         if history:
             system_parts.append(
@@ -348,7 +346,7 @@ class MindSpaceAgent:
         )
         system_ctx = "\n\n".join(system_parts)
 
-        response = await self.brain.achat(system_ctx, [], user_message, tools=tools, mcp_sessions=mcp_sessions, on_progress=on_progress)
+        response = await self.brain.achat(system_ctx, [], user_message, tools=tools, mcp_sessions=mcp_sessions)
         return response.strip()
 
     _TEXT_EXTS = {

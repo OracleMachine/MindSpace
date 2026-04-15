@@ -252,7 +252,7 @@ class MindSpaceBot(discord.Client):
         @self.tree.command(name="consolidate", description="Synthesize stream of consciousness into a structured article.")
         async def cmd_consolidate(interaction: discord.Interaction):
             await interaction.response.defer(thinking=True)
-            await self.handle_consolidate(interaction.channel, interaction.guild, interaction.id)
+            await self.handle_consolidate(interaction.channel, interaction.guild)
 
         @self.tree.command(name="research", description="Deep-dive research on a topic using KB context.")
         @app_commands.describe(topic="The specific topic to research")
@@ -264,7 +264,7 @@ class MindSpaceBot(discord.Client):
         @app_commands.describe(query="The broad query to search across the entire knowledge base")
         async def cmd_omni(interaction: discord.Interaction, query: str):
             await interaction.response.defer(thinking=True)
-            await self.handle_omni(interaction.channel, interaction.guild, query, interaction.id)
+            await self.handle_omni(interaction.channel, interaction.guild, query)
 
         @self.tree.command(name="help", description="Post the MindSpace usage guide to #notification.")
         async def cmd_help(interaction: discord.Interaction):
@@ -413,7 +413,7 @@ WHEN DONE, output ONLY this markdown report (no other prose):
         await self.send_message_safe(channel, report or "No report generated.")
         logger.info(f"**ORGANIZE**: {channel_name} - {commit_msg}", guild)
 
-    async def handle_consolidate(self, channel, guild, interaction_id=None):
+    async def handle_consolidate(self, channel, guild):
         """Synthesize stream of consciousness into a structured permanent article."""
         await channel.send("📑 Consolidating stream of consciousness...")
         channel_name = channel.name
@@ -572,7 +572,7 @@ OUTPUT FORMAT (markdown, no extra prose outside this structure):
             await channel.send(f"✅ Research complete.", file=discord.File(file_path))
         logger.info(f"RESEARCH: completed — topic={topic!r} channel=#{channel_name}", guild)
 
-    async def handle_omni(self, channel, guild, query, interaction_id=None):
+    async def handle_omni(self, channel, guild, query):
         """Cross-KB synthesis across all channels via Gemini CLI with live streaming."""
         await channel.send(f"🌐 Gathering global KB context for: {query}...")
         channel_name = channel.name
@@ -692,10 +692,7 @@ OUTPUT FORMAT (markdown):
             proposal["rel_path"], proposal["rationale"], diff_text
         )
         view = ProposalView(self, proposal_id)
-        send_kwargs = {"content": content, "embed": embed, "view": view}
-        if file is not None:
-            send_kwargs["file"] = file
-        await channel.send(**send_kwargs)
+        await channel.send(content=content, embed=embed, view=view, file=file)
 
     async def handle_propose_update(self, channel_name: str, rel_path: str, instruction: str, rationale: str):
         """Callback triggered by the propose_update tool.
@@ -1108,7 +1105,7 @@ OUTPUT FORMAT (markdown):
             if cmd == "organize":
                 await self.handle_organize(message.channel, message.guild)
             elif cmd == "consolidate":
-                await self.handle_consolidate(message.channel, message.guild, message.id)
+                await self.handle_consolidate(message.channel, message.guild)
             elif cmd == "research":
                 if not args:
                     await message.channel.send("Usage: `!research [topic]`")
@@ -1118,7 +1115,7 @@ OUTPUT FORMAT (markdown):
                 if not args:
                     await message.channel.send("Usage: `!omni [query]`")
                     return
-                await self.handle_omni(message.channel, message.guild, args, message.id)
+                await self.handle_omni(message.channel, message.guild, args)
             elif cmd == "sync":
                 if args:
                     await message.channel.send("Usage: `!sync` (takes no arguments)")
@@ -1244,7 +1241,6 @@ OUTPUT FORMAT (markdown):
                     history=self.kb.get_history(channel_name),
                     tools=wrapped_tools,
                     mcp_sessions=self.mcp_pool.sessions if self.mcp_pool else None,
-                    on_progress=on_progress,
                 )
             finally:
                 for srv, orig in _mcp_originals.items():

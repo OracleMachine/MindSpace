@@ -5,11 +5,6 @@ import os
 import config
 
 # --- Standard Logging Setup ---
-DEBUG = logging.DEBUG
-INFO = logging.INFO
-WARNING = logging.WARNING
-ERROR = logging.ERROR
-
 _STREAM_LEVEL = getattr(logging, config.Log.STREAM_LEVEL, logging.INFO)
 _FILE_LEVEL = getattr(logging, config.Log.FILE_LEVEL, logging.DEBUG)
 _DISCORD_LEVEL = getattr(logging, config.Log.DISCORD_LEVEL, logging.INFO)
