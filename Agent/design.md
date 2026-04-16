@@ -43,7 +43,35 @@ The system uses **VikingContextManager** (wrapping OpenViking) for context navig
 
 ---
 
-## 4. Module Responsibilities
+## 4. Message Handling Flow (Chain of Responsibility)
+
+The bot processes incoming messages through a modular chain of handlers. Each handler inspects the message and either consumes it (halting the chain) or passes it to the next handler.
+
+```mermaid
+graph TD
+    A[on_message] --> B{Is author bot or<br/>reserved channel?}
+    B -- Yes --> C[Ignore]
+    B -- No --> D[ActiveCommandHandler]
+    
+    D -- Starts with '!'? --> E[Execute !command]
+    E --> F[Consume & Stop]
+    
+    D -- No --> G[KnowledgeIngestionHandler]
+    G -- Has URL or Attachment? --> H[Process Ingest]
+    H --> F
+    
+    G -- No --> I[PassiveDialogueHandler]
+    I --> J[LLM Dialogue Loop]
+    J --> F
+```
+
+- **ActiveCommandHandler**: Fast-path for explicit user commands.
+- **KnowledgeIngestionHandler**: Automatic processing of shared resources (links/files).
+- **PassiveDialogueHandler**: Fallback handler that engages the LLM for natural conversation and background KB maintenance.
+
+---
+
+## 5. Module Responsibilities
 
 | Module | Responsibility |
 | :--- | :--- |

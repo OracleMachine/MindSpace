@@ -11,7 +11,12 @@ import git
 import uuid
 import inspect
 import pathlib
+from typing import List, TYPE_CHECKING
 from discord import app_commands
+from Agent.handlers import ActiveCommandHandler, KnowledgeIngestionHandler, PassiveDialogueHandler
+
+if TYPE_CHECKING:
+    from Agent.agent import MindSpaceAgent
 
 # CRITICAL: Suppress litellm background logging workers BEFORE they can start.
 # This prevents 'Event loop is closed' errors during pre-launch indexing.
@@ -230,6 +235,86 @@ class MindSpaceBot(discord.Client):
         # Discord Log Queue (Async sink for the sync logger)
         self._log_queue = asyncio.Queue()
         self._log_publisher_task = None
+
+        # Message Handlers (Chain of Responsibility)
+        self.message_handlers: List[ActiveCommandHandler | KnowledgeIngestionHandler | PassiveDialogueHandler] = [
+            ActiveCommandHandler(),
+            KnowledgeIngestionHandler(),
+            PassiveDialogueHandler()
+        ]
+
+    def wrap_tool_with_progress(self, fn, on_progress):
+        @functools.wraps(fn)
+        async def inner(*args, **kwargs):
+            arg_parts = [repr(a)[:60] for a in args] + [f"{k}={repr(v)[:60]}" for k, v in kwargs.items()]
+            call_summary = f"🔧 {fn.__name__}({', '.join(arg_parts)})"
+            await on_progress(call_summary)
+            try:
+                if inspect.iscoroutinefunction(fn):
+                    result = await fn(*args, **kwargs)
+                else:
+                    result = await asyncio.to_thread(fn, *args, **kwargs)
+                res_preview = str(result)[:100].replace('\n', ' ') + ("..." if len(str(result)) > 100 else "")
+                logger.info(f"Tool: {call_summary} -> {res_preview}")
+                return result
+            except Exception as e:
+                logger.error(f"Tool Error: {fn.__name__} failed: {e}")
+                raise
+        return inner
+
+    def wrap_mcp_with_progress(self, on_progress):
+        self._mcp_originals = {}
+        for srv, session in self.mcp_pool.sessions.items():
+            orig = session.call_tool
+            self._mcp_originals[srv] = orig
+            async def _wrapped(name, arguments=None, *, _orig=orig, _srv=srv, **kw):
+                arg_str = ", ".join(f"{k}={repr(v)[:60]}" for k, v in (arguments or {}).items())
+                await on_progress(f"🌐 MCP {_srv}: {name}({arg_str})")
+                return await _orig(name, arguments, **kw)
+            session.call_tool = _wrapped
+        return self.mcp_pool.sessions
+
+    def unwrap_mcp(self):
+        if hasattr(self, '_mcp_originals'):
+            for srv, orig in self._mcp_originals.items():
+                self.mcp_pool.sessions[srv].call_tool = orig
+            del self._mcp_originals
+
+    async def ingest_content(self, channel, file_path, content, action_desc):
+        """Unified helper to write file and commit state."""
+        self.kb.write_file(file_path, content)
+        commit_msg = await self.agent.generate_commit_message(action_desc)
+        await asyncio.to_thread(self.kb.save_state, commit_msg)
+        return commit_msg
+
+    async def handle_url_ingest(self, message):
+        channel_name = message.channel.name
+        channel_path = self.kb.get_channel_path(channel_name)
+        await message.channel.send("🌐 URL detected. Snapshotting to KB...")
+        markdown_snapshot = await self.agent.process_url(message.content, channel_name)
+        subject = _slugify_subject(_extract_title(markdown_snapshot) or "webpage")
+        filename = f"WEBPAGE-{datetime.date.today()}-{subject}.md"
+        file_path = os.path.join(channel_path, filename)
+        
+        await self.ingest_content(message.channel, file_path, markdown_snapshot, f"Ingested webpage snapshot: {filename}")
+        await self.send_message_safe(message.channel, f"✅ Link ingested and snapshotted: {file_path}")
+        logger.info(f"**INGEST (URL)**: {message.content[:50]}... -> `{filename}`", message.guild)
+
+    async def handle_attachment_ingest(self, message):
+        mentioned = self.user.mentioned_in(message)
+        advice = re.sub(r"<@!?\d+>", "", message.content).strip()
+        for attachment in message.attachments:
+            is_md = attachment.filename.lower().endswith((".md", ".markdown"))
+            if mentioned and is_md:
+                await message.channel.send(f"✍️ Reviewed ingest for `{attachment.filename}` — preparing proposal...")
+                await self._handle_file_proposal(message, attachment, advice)
+            else:
+                prefix = f"📥 `{attachment.filename}` — "
+                if mentioned:
+                    await message.channel.send(f"{prefix}proposal flow is `.md`-only; routing with advice...")
+                else:
+                    await message.channel.send(f"{prefix}routing into KB by content...")
+                await self._handle_file_autoroute(message, attachment, advice=advice if mentioned else "")
 
 
     async def setup_hook(self):
@@ -1153,177 +1238,10 @@ OUTPUT FORMAT (markdown):
         channel_name = message.channel.name
         if channel_name in self.RESERVED_CHANNELS:
             return
-        channel_path = self.kb.get_channel_path(channel_name)
 
-        # --- 1. ACTIVE COMMANDS (! prefix — parity with slash commands) ---
-        if message.content.startswith('!'):
-            command_parts = message.content[1:].split(' ', 1)
-            cmd = command_parts[0].lower()
-            args = command_parts[1] if len(command_parts) > 1 else ""
-
-            if cmd == "organize":
-                await self.handle_organize(message.channel, message.guild)
-            elif cmd == "consolidate":
-                await self.handle_consolidate(message.channel, message.guild)
-            elif cmd == "research":
-                if not args:
-                    await message.channel.send("Usage: `!research [topic]`")
-                    return
-                await self.handle_research(message.channel, message.guild, args, message.id)
-            elif cmd == "omni":
-                if not args:
-                    await message.channel.send("Usage: `!omni [query]`")
-                    return
-                await self.handle_omni(message.channel, message.guild, args)
-            elif cmd == "sync":
-                if args:
-                    await message.channel.send("Usage: `!sync` (takes no arguments)")
-                    return
-                await self.handle_sync(message.channel, message.guild)
-            elif cmd == "change_my_view":
-                if not args:
-                    await message.channel.send("Usage: `!change_my_view [instruction]`")
-                    return
-                await self.handle_change_my_view(message.channel, message.guild, args)
-            elif cmd == "help":
-                # Delete the invocation first so working channels stay clean;
-                # the actual help content lands in #notification.
-                try:
-                    await message.delete()
-                except (discord.Forbidden, discord.NotFound):
-                    logger.warning(
-                        "Could not delete !help invocation "
-                        "(missing Manage Messages permission?)"
-                    )
-                await self.handle_help(message.guild)
-            return
-
-        # --- 2. KNOWLEDGE INGESTION (URLs / file attachments) ---
-        elif "http://" in message.content or "https://" in message.content:
-            await message.channel.send("🌐 URL detected. Snapshotting to KB...")
-            markdown_snapshot = await self.agent.process_url(message.content, channel_name)
-            subject = _slugify_subject(_extract_title(markdown_snapshot) or "webpage")
-            filename = f"WEBPAGE-{datetime.date.today()}-{subject}.md"
-            file_path = os.path.join(channel_path, filename)
-            self.kb.write_file(file_path, markdown_snapshot)
-
-            commit_msg = await self.agent.generate_commit_message(
-                f"Ingested webpage snapshot: {filename}"
-            )
-            await asyncio.to_thread(self.kb.save_state, commit_msg)
-            await self.send_message_safe(message.channel, f"✅ Link ingested and snapshotted: {file_path}")
-            logger.info(f"**INGEST (URL)**: {message.content[:50]}... -> `{filename}`", message.guild)
-
-        elif message.attachments:
-            # Mention is the explicit trigger for the heavy (reviewed) path.
-            # Without a mention, files are silently autorouted. Advice is the
-            # user's message minus the mention token — may be empty.
-            mentioned = self.user.mentioned_in(message)
-            advice = re.sub(r"<@!?\d+>", "", message.content).strip()
-            for attachment in message.attachments:
-                is_md = attachment.filename.lower().endswith((".md", ".markdown"))
-                if mentioned and is_md:
-                    await message.channel.send(
-                        f"✍️ Reviewed ingest for `{attachment.filename}` — preparing proposal..."
-                    )
-                    await self._handle_file_proposal(message, attachment, advice)
-                else:
-                    if mentioned:
-                        await message.channel.send(
-                            f"📥 `{attachment.filename}` — proposal flow is `.md`-only; "
-                            "routing with your advice as a hint..."
-                        )
-                    else:
-                        await message.channel.send(
-                            f"📥 `{attachment.filename}` — routing into KB by content..."
-                        )
-                    await self._handle_file_autoroute(
-                        message, attachment,
-                        advice=advice if mentioned else "",
-                    )
-
-        # --- 3. PASSIVE DIALOGUE (thought recording + tool-augmented replies) ---
-        else:
-            proposal_ids = []
-            async def on_propose(c, p, i, r):
-                res = await self.handle_propose_update(c, p, i, r)
-                if not res.startswith("Error") and len(res) <= 8: # success returns 8-char hex id
-                    proposal_ids.append(res)
-                    return f"Proposal for `{p}` generated and queued for your review."
-                return res
-
-            available_tools = self.tools.get_tools(channel_name, on_propose_update=on_propose)
-
-            status_msg = await message.channel.send("🧠 **Thinking...**")
-
-            async def on_progress(text: str):
-                try:
-                    await status_msg.edit(content=f"🧠 **Thinking...**\n{text}")
-                except Exception:
-                    pass
-
-            def _wrap_tool(fn):
-                @functools.wraps(fn)
-                async def inner(*args, **kwargs):
-                    arg_parts = [repr(a)[:60] for a in args] + [f"{k}={repr(v)[:60]}" for k, v in kwargs.items()]
-                    call_summary = f"🔧 {fn.__name__}({', '.join(arg_parts)})"
-                    
-                    await on_progress(call_summary)
-                    try:
-                        if inspect.iscoroutinefunction(fn):
-                            result = await fn(*args, **kwargs)
-                        else:
-                            result = await asyncio.to_thread(fn, *args, **kwargs)
-                        
-                        # Concise one-liner for successful tool execution
-                        res_preview = str(result)[:100].replace('\n', ' ') + ("..." if len(str(result)) > 100 else "")
-                        logger.info(f"Tool: {call_summary} -> {res_preview}")
-                        return result
-                    except Exception as e:
-                        logger.error(f"Tool Error: {fn.__name__} failed: {e}")
-                        raise
-                return inner
-
-            wrapped_tools = [_wrap_tool(t) for t in available_tools]
-
-            # Wrap MCP session.call_tool so progress fires for MCP tools too.
-            _mcp_originals = {}
-            if self.mcp_pool:
-                for srv, session in self.mcp_pool.sessions.items():
-                    orig = session.call_tool
-                    _mcp_originals[srv] = orig
-                    async def _wrapped(name, arguments=None, *, _orig=orig, _srv=srv, **kw):
-                        arg_str = ", ".join(f"{k}={repr(v)[:60]}" for k, v in (arguments or {}).items())
-                        await on_progress(f"🌐 MCP {_srv}: {name}({arg_str})")
-                        return await _orig(name, arguments, **kw)
-                    session.call_tool = _wrapped
-
-            try:
-                reply = await self.agent.engage_dialogue(
-                    message.content,
-                    channel_name,
-                    history=self.kb.get_history(channel_name),
-                    tools=wrapped_tools,
-                    mcp_sessions=self.mcp_pool.sessions if self.mcp_pool else None,
-                )
-            finally:
-                for srv, orig in _mcp_originals.items():
-                    self.mcp_pool.sessions[srv].call_tool = orig
-
-            try:
-                await status_msg.delete()
-            except Exception:
-                pass
-
-            self.kb.append_history(channel_name, message.author.display_name, message.content)
-            self.kb.append_history(channel_name, "assistant", reply)
-
-            await self.send_message_safe(message.channel, reply)
-
-            # --- SEND PENDING PROPOSALS ---
-            # We process any proposals queued by the propose_update tool this turn.
-            for pid in proposal_ids:
-                await self._send_proposal(message.channel, pid)
+        for handler in self.message_handlers:
+            if await handler.handle(message, self):
+                break
 
 
 def _preflight_check():
