@@ -46,7 +46,23 @@ class KnowledgeBaseManager:
         if not os.path.exists(path):
             os.makedirs(path)
             self.write_file(os.path.join(path, "stream_of_conscious.md"), f"# Stream of Consciousness: {channel_name}\n\n")
+            self.write_file(os.path.join(path, "view.md"), f"# Core View: {channel_name}\n\n")
+        else:
+            # Ensure view.md exists even if the folder was created before this version
+            view_file = os.path.join(path, "view.md")
+            if not os.path.exists(view_file):
+                self.write_file(view_file, f"# Core View: {channel_name}\n\n")
         return path
+
+    def get_view(self, channel_name: str) -> str:
+        """Read the current view.md for the channel."""
+        path = self.get_channel_path(channel_name)
+        view_file = os.path.join(path, "view.md")
+        try:
+            with open(view_file, "r") as f:
+                return f.read().strip()
+        except Exception:
+            return ""
 
     def write_file(self, file_path, content):
         """Atomic write to the filesystem."""

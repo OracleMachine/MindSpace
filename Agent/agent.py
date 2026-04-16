@@ -289,9 +289,30 @@ class MindSpaceAgent:
         # Command brain: !organize, !consolidate, !research, !omni
         logger.info(f"🖥️  MindSpaceAgent: Command brain → Gemini CLI (YOLO mode, model={config.Brains.GEMINI_CLI_MODEL or 'default'})")
         self.cli_brain = GeminiCLIBrain()
+        self.kb = None
 
-    async def run_command(self, instruction: str, context: str = None) -> str:
-        return await self.cli_brain.run_command(instruction, context)
+    def set_kb(self, kb):
+        """Attach the knowledge base manager for systematic context injection."""
+        self.kb = kb
+
+    def _inject_view(self, text: str, channel_name: str) -> str:
+        """Systematically prepend view.md context if available."""
+        if not self.kb or not channel_name:
+            return text
+        view = self.kb.get_view(channel_name)
+        if not view:
+            return text
+        return f"--- Static Mindset (view.md) ---\n{view}\n\n{text}"
+
+    async def run_command(self, instruction: str, context: str = None, channel_name: str = None) -> str:
+        """Run a command via the CLI brain, with optional systematic view injection."""
+        injected_context = self._inject_view(context or "", channel_name) if channel_name else context
+        return await self.cli_brain.run_command_async(instruction, injected_context)
+
+    async def stream(self, prompt: str, cwd: str, channel_name: str = None) -> "CliStream":
+        """Stream a CLI command, with optional systematic view injection."""
+        injected_prompt = self._inject_view(prompt, channel_name) if channel_name else prompt
+        return await self.cli_brain.stream(injected_prompt, cwd)
 
     def close(self):
         close_fn = getattr(self.brain, 'close', None)
@@ -345,8 +366,9 @@ class MindSpaceAgent:
             "Reply naturally to the user."
         )
         system_ctx = "\n\n".join(system_parts)
+        injected_ctx = self._inject_view(system_ctx, channel_name)
 
-        response = await self.brain.achat(system_ctx, [], user_message, tools=tools, mcp_sessions=mcp_sessions)
+        response = await self.brain.achat(injected_ctx, [], user_message, tools=tools, mcp_sessions=mcp_sessions)
         return response.strip()
 
     _TEXT_EXTS = {
@@ -435,6 +457,7 @@ class MindSpaceAgent:
             f"- subfolder is RELATIVE to the channel folder. Use '' (empty) for channel root.\n"
             f"- Prefer reusing an existing subfolder from the listing over inventing a new one.\n"
             f"- filename MUST preserve the original extension ({ext or 'any'}).\n"
+            f"- filename MUST NOT be 'view.md'.\n"
             f"- Follow the TYPE-DATE-SUBJECT convention where possible. Use kebab-case. "
             f"Date format: YYYY-MM-DD. Example: NOTE-2026-04-14-grpo-vs-ppo.md\n"
             f"- Do NOT include path separators in the filename.\n"
@@ -480,6 +503,7 @@ class MindSpaceAgent:
             f"CHANNEL KB SEMANTIC CONTEXT (what's already indexed):\n{kb_context or '(empty)'}\n\n"
             f"CHANNEL FOLDER LAYOUT:\n{tree_listing}\n\n"
             f"RULES:\n"
+            f"- target_rel_path MUST NOT be 'view.md'.\n"
             f"- Pick mode='update' ONLY if there is a clearly-matching existing file whose "
             f"topic overlaps the draft and where merging makes editorial sense.\n"
             f"- Otherwise pick mode='new'.\n"

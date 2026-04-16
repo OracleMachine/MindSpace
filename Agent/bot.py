@@ -260,6 +260,12 @@ class MindSpaceBot(discord.Client):
             await interaction.response.defer(thinking=True)
             await self.handle_research(interaction.channel, interaction.guild, topic, interaction=interaction)
 
+        @self.tree.command(name="change_my_view", description="Update the static mindset (view.md) for this channel.")
+        @app_commands.describe(instruction="How to update the core mindset (e.g., 'Emphasize local-first development')")
+        async def cmd_change_my_view(interaction: discord.Interaction, instruction: str):
+            await interaction.response.defer(thinking=True)
+            await self.handle_change_my_view(interaction.channel, interaction.guild, instruction, interaction=interaction)
+
         @self.tree.command(name="omni", description="Cross-KB synthesis across all channels.")
         @app_commands.describe(query="The broad query to search across the entire knowledge base")
         async def cmd_omni(interaction: discord.Interaction, query: str):
@@ -292,6 +298,7 @@ class MindSpaceBot(discord.Client):
         if self.kb is None:
             self.kb = KnowledgeBaseManager(guild.name)
             self.tools = MindSpaceTools(self.kb)
+            self.agent.set_kb(self.kb)
             logger.info(f"Initialized KB and Tools for server: {guild.name}")
 
         # Sync Slash Commands
@@ -379,7 +386,7 @@ TASK:
 2. Determine the most semantically appropriate subfolder within this channel (e.g., Research/, Notes/, Articles/)
 3. Create subfolders as needed
 4. Move each file to its determined location
-5. DO NOT move or modify stream_of_conscious.md
+5. DO NOT move or modify stream_of_conscious.md or view.md
 6. DO NOT move files that are already inside a subfolder
 
 You have full write permissions. Operate only within this directory. Make all decisions autonomously.
@@ -397,9 +404,10 @@ WHEN DONE, output ONLY this markdown report (no other prose):
 **Skipped:**
 - `<file>`: <reason>
 """
-        handle = await self.agent.cli_brain.stream(
+        handle = await self.agent.stream(
             prompt=prompt,
             cwd=channel_path,
+            channel_name=channel_name,
         )
         await self._render_stream_to_channel(
             channel, header="🔄 Gemini CLI organizing...", handle=handle,
@@ -424,7 +432,8 @@ WHEN DONE, output ONLY this markdown report (no other prose):
             content = f.read()
 
         synthesis = await self.agent.run_command(
-            f"Synthesize these thoughts into a structured permanent article:\n\n{content}"
+            f"Synthesize these thoughts into a structured permanent article:\n\n{content}",
+            channel_name=channel_name
         )
         subject = _slugify_subject(_extract_title(synthesis) or channel_name)
         filename = f"ARTICLE-{datetime.date.today()}-{subject}.md"
@@ -520,9 +529,10 @@ OUTPUT FORMAT (markdown, no extra prose outside this structure):
                     f"prompt_len={len(prompt)}")
         await status(f"🔬 Running Gemini CLI on: {topic}\n(watch console for live progress)")
 
-        handle = await self.agent.cli_brain.stream(
+        handle = await self.agent.stream(
             prompt=prompt,
             cwd=channel_path,
+            channel_name=channel_name,
         )
         # Stream CLI output to the deferred interaction's "thinking..." message,
         # editing it every ~2s with the latest tail so the user sees progress
@@ -613,9 +623,10 @@ OUTPUT FORMAT (markdown):
 
         # cwd=Channels/ so the CLI can read across all channels (omni's whole
         # point) but is sandboxed from bot-home/, openviking/, and ov.conf.
-        handle = await self.agent.cli_brain.stream(
+        handle = await self.agent.stream(
             prompt=prompt,
             cwd=config.Paths.CHANNELS,
+            channel_name=channel.name,
         )
         await self._render_stream_to_channel(
             channel, header=f"🌐 Gemini CLI synthesizing: {query}...", handle=handle,
@@ -638,6 +649,53 @@ OUTPUT FORMAT (markdown):
         await asyncio.to_thread(self.kb.save_state, commit_msg)
         await channel.send(f"✅ Omni search complete.", file=discord.File(file_path))
         logger.info(f"**OMNI**: {query}", guild)
+
+    async def handle_change_my_view(self, channel, guild, instruction, interaction=None):
+        """Update the static mindset (view.md) via LLM rewrite and proposal UI."""
+        channel_name = channel.name
+        current_view = self.kb.get_view(channel_name)
+        
+        status_msg = None
+        if not interaction:
+            status_msg = await channel.send(f"🔄 Thinking about your mindset change: {instruction}...")
+
+        prompt = (
+            f"You are updating the user's static mindset view for channel #{channel_name}.\n"
+            f"Current view.md content:\n{current_view if current_view else '(empty)'}\n\n"
+            f"Instruction to update the view:\n{instruction}\n\n"
+            f"TASK:\n"
+            f"Rewrite the entire view.md content to incorporate the new instruction while maintaining existing core principles if they still apply. "
+            f"Keep it concise and impactful. Output ONLY the new markdown content. Do not include formatting backticks or explanations."
+        )
+        
+        new_view = await self.agent.run_command(prompt, channel_name=channel_name)
+        
+        # Clean up output
+        if new_view.startswith("```markdown"):
+            new_view = new_view[11:]
+        if new_view.startswith("```"):
+            new_view = new_view[3:]
+        if new_view.endswith("```"):
+            new_view = new_view[:-3]
+        new_view = new_view.strip()
+
+        proposal_id = self._create_proposal(
+            channel_name=channel_name,
+            rel_path="view.md",
+            existing_content=current_view,
+            proposed_content=new_view,
+            instruction=instruction,
+            rationale="User requested a mindset view change."
+        )
+
+        if status_msg:
+            try:
+                await status_msg.delete()
+            except:
+                pass
+
+        await self._send_proposal(channel, proposal_id)
+        logger.info(f"**CHANGE_MY_VIEW**: Proposed update for #{channel_name}: {instruction}", guild)
 
     async def handle_help(self, guild):
         """Post the usage guide to #notification. Returns the channel (or None)."""
@@ -695,9 +753,10 @@ OUTPUT FORMAT (markdown):
         await channel.send(content=content, embed=embed, view=view, file=file)
 
     async def handle_propose_update(self, channel_name: str, rel_path: str, instruction: str, rationale: str):
-        """Callback triggered by the propose_update tool.
-        Uses an isolated LLM call to generate proposed content in memory.
-        Returns the proposal_id on success, or an error message."""
+        """Callback triggered by the propose_update tool."""
+        if rel_path.lower() == "view.md":
+            return "Error: `view.md` is a protected system file and can only be modified via `!change_my_view`."
+        
         channel_path = self.kb.get_channel_path(channel_name)
         abs_path = os.path.abspath(os.path.join(channel_path, rel_path))
 
@@ -1121,6 +1180,11 @@ OUTPUT FORMAT (markdown):
                     await message.channel.send("Usage: `!sync` (takes no arguments)")
                     return
                 await self.handle_sync(message.channel, message.guild)
+            elif cmd == "change_my_view":
+                if not args:
+                    await message.channel.send("Usage: `!change_my_view [instruction]`")
+                    return
+                await self.handle_change_my_view(message.channel, message.guild, args)
             elif cmd == "help":
                 # Delete the invocation first so working channels stay clean;
                 # the actual help content lands in #notification.

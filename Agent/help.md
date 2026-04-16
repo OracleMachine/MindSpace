@@ -38,6 +38,7 @@ The bot branches on a single question: **did you @mention me?** That's the expli
 - `/organize` — Scan untracked files in the current channel and semantically reorganize them. Commits the result.
 - `/consolidate` — Synthesize `stream_of_conscious.md` into a structured dated article; clears the stream.
 - `/research <topic>` — Generate a cited research report using KB context + web search. Saves and posts the file.
+- `/change_my_view <instruction>` — Update the static mindset (`view.md`) for this channel via a reviewed proposal.
 - `/omni <query>` — Cross-KB synthesis across all channel folders.
 - `/sync` — Manually rebuild the vector index for the current channel (picks up external filesystem edits).
 - `/help` — Post this guide to `#notification`.
