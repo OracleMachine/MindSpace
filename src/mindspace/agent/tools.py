@@ -1,6 +1,6 @@
 import os
 import logging
-from logger import logger
+from mindspace.core.logger import logger
 
 class MindSpaceTools:
     """

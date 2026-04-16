@@ -3,200 +3,31 @@ import os
 import re
 import io
 import datetime
-import difflib
-import config
+import pathlib
 import asyncio
 import functools
 import git
 import uuid
 import inspect
-import pathlib
-from typing import List, TYPE_CHECKING
+from typing import List
 from discord import app_commands
-from Agent.handlers import ActiveCommandHandler, KnowledgeIngestionHandler, PassiveDialogueHandler
 
-if TYPE_CHECKING:
-    from Agent.agent import MindSpaceAgent
+from mindspace.core import config
+from mindspace.core.logger import logger
+from mindspace.agent.agent import MindSpaceAgent
+from mindspace.agent.tools import MindSpaceTools
+from mindspace.knowledgebase.manager import KnowledgeBaseManager
+from mindspace.bot.handlers import ActiveCommandHandler, KnowledgeIngestionHandler, PassiveDialogueHandler
+from mindspace.bot.views import ProposalView, RefineModal, _render_diff, _format_proposal_message
+import mindspace.agent.mcp as mcp_bridge
 
 # CRITICAL: Suppress litellm background logging workers BEFORE they can start.
-# This prevents 'Event loop is closed' errors during pre-launch indexing.
 try:
     import litellm
     litellm._suppress_logging_worker = True
     litellm.suppress_debug_info = True
 except ImportError:
     pass
-
-
-def _render_diff(existing: str, proposed: str, file_path: str) -> str:
-    if not existing:
-        diff_lines = [f"+{line}" for line in proposed.splitlines()]
-        return f"--- /dev/null\n+++ b/{file_path}\n" + "\n".join(diff_lines)
-    return "\n".join(difflib.unified_diff(
-        existing.splitlines(), proposed.splitlines(),
-        fromfile=f"a/{file_path}", tofile=f"b/{file_path}", lineterm=""
-    ))
-
-
-_DIFF_EMBED_LIMIT = 4000  # headroom under Discord's 4096-char embed description cap
-
-
-def _format_proposal_message(rel_path: str, rationale: str, diff_text: str):
-    """Build a proposal message payload.
-
-    Returns `(content, embed, file)` where:
-      - `content` is the short header line (always visible in the feed).
-      - `embed` carries the diff in its description — up to ~4 KB inline,
-        roughly 2.7× what the previous single-message code fence allowed.
-      - `file` is a `discord.File` with the *complete* diff, attached when
-        even the embed limit forces truncation. `None` otherwise.
-
-    Callers should pass all three fields to `send(...)` / the edit equivalent
-    so nothing gets lost on long updates.
-    """
-    content = (
-        f"\U0001f4a1 **KB Update Proposal for `{rel_path}`**\n"
-        f"> {rationale}"
-    )
-
-    fence_overhead = len("```diff\n\n```")
-    inline_limit = _DIFF_EMBED_LIMIT - fence_overhead
-
-    attachment = None
-    if len(diff_text) > inline_limit:
-        marker = "\n... (truncated — full diff attached)"
-        cut = inline_limit - len(marker)
-        preview = diff_text[:cut].rsplit("\n", 1)[0] + marker
-        safe_name = rel_path.replace("/", "_").replace("\\", "_") + ".diff"
-        attachment = discord.File(
-            io.BytesIO(diff_text.encode("utf-8")), filename=safe_name
-        )
-    else:
-        preview = diff_text
-
-    embed = discord.Embed(
-        description=f"```diff\n{preview}\n```",
-        color=0x3498db,
-    )
-    return content, embed, attachment
-
-
-class ProposalView(discord.ui.View):
-    def __init__(self, bot, proposal_id, timeout=3600):
-        super().__init__(timeout=timeout)
-        self.bot = bot
-        self.proposal_id = proposal_id
-
-    async def on_timeout(self):
-        self.bot._pending_proposals.pop(self.proposal_id, None)
-
-    @discord.ui.button(label="Apply", style=discord.ButtonStyle.green, emoji="✅")
-    async def apply(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.defer()
-        proposal = self.bot._pending_proposals.pop(self.proposal_id, None)
-        if not proposal:
-            await interaction.edit_original_response(content="⚠️ Proposal expired or not found.", view=None)
-            return
-
-        abs_path = os.path.join(
-            self.bot.kb.channels_path, proposal["channel_name"], proposal["rel_path"]
-        )
-        # Write to disk only now
-        self.bot.kb.write_file(abs_path, proposal["proposed_content"])
-
-        # Index immediately so the search index picks up the new content
-        # before the final commit/indexing loop.
-        await asyncio.to_thread(self.bot.kb.index_files, [os.path.join("Channels", proposal["channel_name"], proposal["rel_path"])])
-
-        # Generate a commit message based on the update's rationale
-        commit_msg = await self.bot.agent.generate_commit_message(
-            f"KB update: {proposal['rel_path']} — {proposal['rationale']}"
-        )
-        await asyncio.to_thread(self.bot.kb.save_state, commit_msg)
-
-        await interaction.edit_original_response(
-            content=f"✅ **Applied proposal:** {proposal['rationale']}\n*(Written, indexed, and committed)*", view=None
-        )
-        logger.info(f"PROPOSAL: Applied change to {proposal['rel_path']}", interaction.guild)
-
-    @discord.ui.button(label="Discard", style=discord.ButtonStyle.red, emoji="🗑️")
-    async def discard(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.defer()
-        proposal = self.bot._pending_proposals.pop(self.proposal_id, None)
-        rationale = proposal["rationale"] if proposal else "unknown"
-        await interaction.edit_original_response(content=f"🗑️ **Discarded proposal:** {rationale}", view=None)
-
-    @discord.ui.button(label="Refine", style=discord.ButtonStyle.blurple, emoji="✍️")
-    async def refine(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(RefineModal(self))
-
-
-class RefineModal(discord.ui.Modal, title="Refine Proposal"):
-    feedback = discord.ui.TextInput(
-        label="How should this be changed?",
-        style=discord.TextStyle.paragraph,
-        placeholder='e.g., "Make it shorter", "Add more details about X"',
-        required=True,
-    )
-
-    def __init__(self, view: ProposalView):
-        super().__init__()
-        self.proposal_view = view
-
-    async def on_submit(self, interaction: discord.Interaction):
-        await interaction.response.defer()
-        proposal = self.proposal_view.bot._pending_proposals.get(self.proposal_view.proposal_id)
-        if not proposal:
-            return
-
-        await interaction.edit_original_response(
-            content=f"⏳ **Refining proposal based on feedback:** {self.feedback.value}...", view=None
-        )
-
-        # Isolated Refinement Agent - only pass the proposed version and user feedback
-        # to save tokens and focus on the iterative update.
-        prompt = f"""
-Modify the following proposed Knowledge Base update based on this user feedback:
-FEEDBACK: {self.feedback.value}
-
-PREVIOUS PROPOSED VERSION:
----
-{proposal['proposed_content']}
----
-
-TASK:
-- Incorporate the feedback into the proposed version.
-- Maintain existing tone, formatting, and markdown structure.
-- Output ONLY the complete, revised markdown document.
-- NO commentary or conversational filler.
-"""
-        revised = await self.proposal_view.bot.agent.brain.run_command_async(prompt)
-
-        proposal["proposed_content"] = revised
-        diff_text = _render_diff(proposal["existing_content"], revised, proposal["rel_path"])
-        content, embed, file = _format_proposal_message(
-            proposal["rel_path"], proposal["rationale"], diff_text
-        )
-        view = ProposalView(self.proposal_view.bot, self.proposal_view.proposal_id)
-        # `attachments=[...]` fully replaces the prior attachments — pass the
-        # refined diff file if it still overflows, or clear any stale file when
-        # the refined diff fits inline.
-        await interaction.edit_original_response(
-            content=content,
-            embed=embed,
-            attachments=[file] if file is not None else [],
-            view=view,
-        )
-
-
-def _slugify_subject(text: str, max_len: int = 50) -> str:
-    """Filesystem-safe kebab-case slug from free text, used as the SUBJECT
-    segment of TYPE-DATE-SUBJECT output filenames. Falls back to 'untitled'
-    for empty / unslugifiable input."""
-    s = re.sub(r"[^\w\s-]", "", text.lower())
-    s = re.sub(r"[\s_]+", "-", s).strip("-")
-    return s[:max_len].rstrip("-") or "untitled"
-
 
 def _extract_title(markdown: str) -> str | None:
     """Return the first H1 (# …) text, or None if absent."""
@@ -206,37 +37,32 @@ def _extract_title(markdown: str) -> str | None:
             return line[2:].strip()
     return None
 
-
-from agent import MindSpaceAgent
-from tools import MindSpaceTools
-from manager import KnowledgeBaseManager
-from logger import logger
-import mcp_bridge
+def _slugify_subject(text: str, max_len: int = 50) -> str:
+    """Filesystem-safe kebab-case slug from free text."""
+    s = re.sub(r"[^\w\s-]", "", text.lower())
+    s = re.sub(r"[\s_]+", "-", s).strip("-")
+    return s[:max_len].rstrip("-") or "untitled"
 
 class MindSpaceBot(discord.Client):
-    # Reserved channels are auto-created on startup and never processed by
-    # on_message. Each value is the init greeting posted on first creation.
     RESERVED_CHANNELS = {
         "system-log": "🚀 **MindSpace System Log Initialized.**",
         "notification": "🔔 **MindSpace Notification Channel Initialized.**",
     }
 
-    HELP_TEXT = (pathlib.Path(__file__).parent / "help.md").read_text(encoding="utf-8")
+    HELP_TEXT = (pathlib.Path(__file__).parent.parent.parent.parent / "docs" / "help.md").read_text(encoding="utf-8")
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.agent = None  # initialized in setup_hook (inside the event loop)
-        self.kb = None     # initialized in on_ready (after guild info available)
+        self.agent = None
+        self.kb = None
         self.tools = None
-        self.mcp_pool = None  # initialized in setup_hook; drains into dialogue brain tools
+        self.mcp_pool = None
         self._pending_proposals: dict[str, dict] = {}
         self.tree = app_commands.CommandTree(self)
 
-        # Discord Log Queue (Async sink for the sync logger)
         self._log_queue = asyncio.Queue()
         self._log_publisher_task = None
 
-        # Message Handlers (Chain of Responsibility)
         self.message_handlers: List[ActiveCommandHandler | KnowledgeIngestionHandler | PassiveDialogueHandler] = [
             ActiveCommandHandler(),
             KnowledgeIngestionHandler(),
@@ -318,15 +144,11 @@ class MindSpaceBot(discord.Client):
 
 
     async def setup_hook(self):
-        """Initialize the agent, register slash commands, and start background tasks.
-        Runs inside the event loop — genai.Client binds to the correct loop here.
-        """
         self.agent = MindSpaceAgent()
         mcp_bridge.sync_cli_settings()
         self.mcp_pool = mcp_bridge.MCPSessionPool(config.MCP.SERVERS)
         await self.mcp_pool.connect()
 
-        # Start the log publisher immediately
         self._log_publisher_task = self.loop.create_task(self._log_publisher())
 
         @self.tree.command(name="organize", description="Re-sync and organize the current channel's knowledge base folder.")
@@ -371,11 +193,8 @@ class MindSpaceBot(discord.Client):
             logger.warning("Bot is not in any guilds.")
             return
 
-        # Initialize the SINGLE KnowledgeBaseManager for the first guild
         guild = self.guilds[0]
         
-        # Inject synchronous logging callback.
-        # Uses call_soon_threadsafe so logger.info() works from any thread.
         def bridge_to_discord(msg: str):
             self.loop.call_soon_threadsafe(self._log_queue.put_nowait, msg)
         logger.set_callback(bridge_to_discord)
@@ -386,7 +205,6 @@ class MindSpaceBot(discord.Client):
             self.agent.set_kb(self.kb)
             logger.info(f"Initialized KB and Tools for server: {guild.name}")
 
-        # Sync Slash Commands
         try:
             self.tree.copy_global_to(guild=guild)
             await self.tree.sync(guild=guild)
@@ -402,8 +220,8 @@ class MindSpaceBot(discord.Client):
         logger.info("Startup: syncing KB folders → Discord channels...")
         await self._sync_kb_channels(guild)
 
-        # Get Git info for both repos
-        agent_repo = git.Repo(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        agent_repo_path = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+        agent_repo = git.Repo(agent_repo_path)
         agent_git = agent_repo.git.describe("--tags", "--dirty", "--always")
         thought_git = self.kb._repo.git.describe("--tags", "--dirty", "--always")
 
@@ -413,15 +231,7 @@ class MindSpaceBot(discord.Client):
             if channel.name not in self.RESERVED_CHANNELS:
                 await self._seed_channel_history(channel)
 
-    # --- CORE COMMAND LOGIC (Agnostic to Trigger) ---
-
     async def _render_stream_to_channel(self, channel, header: str, handle) -> str:
-        """Render a CLI stream handle to a single live-updating Discord message.
-
-        `handle` is any async-iterable that yields clean assistant content chunks.
-        This method is pure UI — it knows nothing about subprocesses, env, or the
-        CLI itself. Returns the full joined output.
-        """
         status_msg = await channel.send(f"{header}\n```\n(initializing...)\n```")
         all_parts: list[str] = []
 
@@ -443,7 +253,6 @@ class MindSpaceBot(discord.Client):
         return "".join(all_parts).strip()
 
     async def handle_organize(self, channel, guild):
-        """Organize the channel folder via Gemini CLI with live progress streaming."""
         await channel.send("🔄 Scanning channel folder...")
         channel_name = channel.name
         channel_path = self.kb.get_channel_path(channel_name)
@@ -507,7 +316,6 @@ WHEN DONE, output ONLY this markdown report (no other prose):
         logger.info(f"**ORGANIZE**: {channel_name} - {commit_msg}", guild)
 
     async def handle_consolidate(self, channel, guild):
-        """Synthesize stream of consciousness into a structured permanent article."""
         await channel.send("📑 Consolidating stream of consciousness...")
         channel_name = channel.name
         channel_path = self.kb.get_channel_path(channel_name)
@@ -535,19 +343,6 @@ WHEN DONE, output ONLY this markdown report (no other prose):
         logger.info(f"**CONSOLIDATE**: {channel_name} -> `{filename}`", guild)
 
     async def handle_research(self, channel, guild, topic, interaction: discord.Interaction = None):
-        """
-        Deep-dive on topic via Gemini CLI (web search + KB context).
-
-        If triggered via slash command (interaction provided), all status
-        updates edit the deferred "thinking..." message in place — no
-        follow-ups are sent. Text-command fallback uses channel.send.
-
-        Streams CLI output via agent.cli_brain.stream() — each chunk is
-        logged to console as it arrives and the event loop stays responsive.
-        """
-        # Status updater — edits the deferred interaction response when present,
-        # otherwise sends a fresh channel message. Single source for all progress
-        # communication so we never spawn extra messages.
         async def status(content: str):
             if interaction is not None:
                 try:
@@ -561,14 +356,9 @@ WHEN DONE, output ONLY this markdown report (no other prose):
         await status(f"🔬 Gathering KB context for: {topic}...")
         channel_name = channel.name
         channel_path = self.kb.get_channel_path(channel_name)
-        logger.debug(f"RESEARCH: channel_path={channel_path}")
 
         viking_context = await asyncio.to_thread(self.kb.get_channel_context, channel_name, topic)
         deep_context = await asyncio.to_thread(self.kb.get_deep_context, channel_name, topic)
-        logger.debug(
-            f"RESEARCH: viking_context={len(viking_context or '')} chars, "
-            f"deep_context={len(deep_context or '')} chars"
-        )
 
         combined = ""
         if viking_context:
@@ -610,8 +400,6 @@ OUTPUT FORMAT (markdown, no extra prose outside this structure):
 ## Sources
 - <url or KB path>: <one-line description>
 """
-        logger.info(f"RESEARCH: invoking Gemini CLI — cwd={channel_path}, "
-                    f"prompt_len={len(prompt)}")
         await status(f"🔬 Running Gemini CLI on: {topic}\n(watch console for live progress)")
 
         handle = await self.agent.stream(
@@ -619,13 +407,8 @@ OUTPUT FORMAT (markdown, no extra prose outside this structure):
             cwd=channel_path,
             channel_name=channel_name,
         )
-        # Stream CLI output to the deferred interaction's "thinking..." message,
-        # editing it every ~2s with the latest tail so the user sees progress
-        # without any follow-up spam. Console still gets every line.
         header = f"🔬 Researching: **{topic}**"
         await self._render_stream_to_channel(channel, header=header, handle=handle)
-
-        logger.info(f"RESEARCH: CLI exited — returncode={handle.returncode}")
 
         if handle.returncode != 0:
             logger.error(f"RESEARCH: CLI failed with non-zero exit {handle.returncode}")
@@ -634,26 +417,20 @@ OUTPUT FORMAT (markdown, no extra prose outside this structure):
 
         report = handle.get_full_response()
         if not report:
-            logger.error("RESEARCH: CLI produced empty output")
             await status("⚠️ Research produced no output.")
             return
-
-        logger.debug(f"RESEARCH: report preview:\n{report[:500]}...")
 
         subject = _slugify_subject(topic)
         filename = f"RESEARCH-{datetime.date.today()}-{subject}.md"
         file_path = os.path.join(channel_path, filename)
         lineage = f"\n\n---\n**Lineage:**\n- Path: {file_path}\n- URI: viking://{guild.name}/{channel_name}/{filename}"
         self.kb.write_file(file_path, report + lineage)
-        logger.info(f"RESEARCH: wrote report to {file_path}")
 
         commit_msg = await self.agent.generate_commit_message(
             f"Research synthesis on {topic}"
         )
         await asyncio.to_thread(self.kb.save_state, commit_msg)
 
-        # Final update: edit the "thinking..." message to show completion AND attach
-        # the research file in the same message — no follow-up created.
         if interaction is not None:
             try:
                 await interaction.edit_original_response(
@@ -668,7 +445,6 @@ OUTPUT FORMAT (markdown, no extra prose outside this structure):
         logger.info(f"RESEARCH: completed — topic={topic!r} channel=#{channel_name}", guild)
 
     async def handle_omni(self, channel, guild, query):
-        """Cross-KB synthesis across all channels via Gemini CLI with live streaming."""
         await channel.send(f"🌐 Gathering global KB context for: {query}...")
         channel_name = channel.name
         channel_path = self.kb.get_channel_path(channel_name)
@@ -705,9 +481,6 @@ OUTPUT FORMAT (markdown):
 ## Sources
 - <path or url>: <one-line description>
 """
-
-        # cwd=Channels/ so the CLI can read across all channels (omni's whole
-        # point) but is sandboxed from bot-home/, openviking/, and ov.conf.
         handle = await self.agent.stream(
             prompt=prompt,
             cwd=config.Paths.CHANNELS,
@@ -736,7 +509,6 @@ OUTPUT FORMAT (markdown):
         logger.info(f"**OMNI**: {query}", guild)
 
     async def handle_change_my_view(self, channel, guild, instruction, interaction=None):
-        """Update the static mindset (view.md) via LLM rewrite and proposal UI."""
         channel_name = channel.name
         current_view = self.kb.get_view(channel_name)
         
@@ -755,7 +527,6 @@ OUTPUT FORMAT (markdown):
         
         new_view = await self.agent.run_command(prompt, channel_name=channel_name)
         
-        # Clean up output
         if new_view.startswith("```markdown"):
             new_view = new_view[11:]
         if new_view.startswith("```"):
@@ -783,7 +554,6 @@ OUTPUT FORMAT (markdown):
         logger.info(f"**CHANGE_MY_VIEW**: Proposed update for #{channel_name}: {instruction}", guild)
 
     async def handle_help(self, guild):
-        """Post the usage guide to #notification. Returns the channel (or None)."""
         channel = await self._ensure_channel(
             guild, "notification", self.RESERVED_CHANNELS["notification"]
         )
@@ -793,12 +563,9 @@ OUTPUT FORMAT (markdown):
         return channel
 
     async def handle_sync(self, channel, guild):
-        """Manually trigger a native directory sync for the current channel."""
         channel_name = channel.name
         await channel.send(f"🔄 Syncing Knowledge Base for `#{channel_name}`...")
-        
         try:
-            # Trigger native directory sync for this channel (O(N) CPU scan, but O(1) token embeddings)
             await asyncio.to_thread(self.kb.viking.rebuild_index, channel_name)
             await channel.send(f"✅ KB sync complete for `#{channel_name}`. All manual edits and reorganizations are now indexed.")
             logger.info(f"**SYNC**: Manual sync triggered for #{channel_name}", guild)
@@ -809,7 +576,6 @@ OUTPUT FORMAT (markdown):
     def _create_proposal(self, channel_name: str, rel_path: str,
                           existing_content: str, proposed_content: str,
                           instruction: str, rationale: str) -> str:
-        """Store a proposal in memory and return its 8-char hex id."""
         proposal_id = uuid.uuid4().hex[:8]
         self._pending_proposals[proposal_id] = {
             "channel_name": channel_name,
@@ -822,7 +588,6 @@ OUTPUT FORMAT (markdown):
         return proposal_id
 
     async def _send_proposal(self, channel, proposal_id: str):
-        """Render a pending proposal as a diff message with Apply/Discard/Refine buttons."""
         proposal = self._pending_proposals.get(proposal_id)
         if not proposal:
             return
@@ -838,14 +603,12 @@ OUTPUT FORMAT (markdown):
         await channel.send(content=content, embed=embed, view=view, file=file)
 
     async def handle_propose_update(self, channel_name: str, rel_path: str, instruction: str, rationale: str):
-        """Callback triggered by the propose_update tool."""
         if rel_path.lower() == "view.md":
             return "Error: `view.md` is a protected system file and can only be modified via `!change_my_view`."
         
         channel_path = self.kb.get_channel_path(channel_name)
         abs_path = os.path.abspath(os.path.join(channel_path, rel_path))
 
-        # Security check: ensure path is under Channels/
         channels_abs = os.path.abspath(config.Paths.CHANNELS)
         if os.path.commonpath([abs_path, channels_abs]) != channels_abs:
             return "Error: Security violation — cannot edit files outside the knowledge base."
@@ -855,8 +618,6 @@ OUTPUT FORMAT (markdown):
             with open(abs_path, "r") as f:
                 existing_content = f.read()
 
-        # Isolated Rewrite Agent (Stateless)
-        # This keeps the Dialogue History lean and prevents context bloat.
         if existing_content:
             prompt = (
                 f"Modify the following Knowledge Base file based on this instruction:\n"
@@ -872,7 +633,6 @@ OUTPUT FORMAT (markdown):
                 f"The file will be saved as: {rel_path}\n"
                 f"Output ONLY the complete markdown document — no commentary."
             )
-        logger.info(f"PROPOSAL: Generating rewrite for {rel_path} in #{channel_name}...")
         proposed_content = await self.agent.brain.run_command_async(prompt)
 
         if not proposed_content.strip():
@@ -891,12 +651,7 @@ OUTPUT FORMAT (markdown):
             rationale=rationale,
         )
 
-    # --- FILE DROP HANDLERS ---
-
     def _sanitize_subfolder(self, channel_name: str, subfolder: str) -> str:
-        """Return a safe subfolder relative to the channel folder, or '' on
-        rejection. `commonpath` catches traversal, absolute paths, and symlinks
-        in one check — no need for string-level `..` filtering first."""
         if not subfolder:
             return ""
         sub = subfolder.strip().strip("/")
@@ -906,23 +661,18 @@ OUTPUT FORMAT (markdown):
         target_abs = os.path.abspath(os.path.join(channel_abs, sub))
         try:
             if os.path.commonpath([target_abs, channel_abs]) != channel_abs:
-                logger.warning(f"autoroute: rejected subfolder {subfolder!r} (escapes channel)")
                 return ""
         except ValueError:
-            # commonpath raises on absolute paths with different drives (Windows)
-            logger.warning(f"autoroute: rejected subfolder {subfolder!r} (commonpath failed)")
             return ""
         return sub
 
     def _sanitize_filename(self, filename: str, fallback: str) -> str:
-        """Strip path separators and hidden-file prefixes."""
         if not filename:
             return fallback
         name = os.path.basename(filename).lstrip(".")
         return name or fallback
 
     def _dedupe_path(self, abs_path: str) -> str:
-        """If abs_path exists, append -2, -3, ... before the extension until free."""
         if not os.path.exists(abs_path):
             return abs_path
         stem, ext = os.path.splitext(abs_path)
@@ -934,11 +684,6 @@ OUTPUT FORMAT (markdown):
             i += 1
 
     async def _handle_file_autoroute(self, message, attachment, advice: str = ""):
-        """Path A — route a dropped file into a content-appropriate subfolder of
-        the current channel and rename by content. Writes bytes directly to the
-        final path (no staging) and then runs `analyze_file` for PDF indexing
-        and a content summary. `advice` is optional steering text, non-empty
-        only when the user @mentioned the bot with a non-`.md` file."""
         channel_name = message.channel.name
         ext = os.path.splitext(attachment.filename)[1].lower()
 
@@ -991,375 +736,118 @@ OUTPUT FORMAT (markdown):
         )
 
     def _proposal_fallback_path(self, draft_content: str, attachment_name: str) -> str:
-        """Content-derived new-file path used whenever the planner's target is
-        unusable (empty, non-`.md`, escapes channel, or missing on disk)."""
-        subject = _slugify_subject(
-            _extract_title(draft_content) or attachment_name.rsplit(".", 1)[0]
-        )
+        subject = _slugify_subject(_extract_title(draft_content) or attachment_name.rsplit(".", 1)[0])
         return f"NOTE-{datetime.date.today()}-{subject}.md"
 
     def _resolve_proposal_target(self, channel_path: str, plan: dict,
                                  draft_content: str, attachment_name: str
                                  ) -> tuple[str, str, str]:
-        """Validate the planner's target and resolve `existing_content`. Falls
-        back to a content-derived new-file path on any validation failure.
-        Returns (mode, target_rel, existing_content)."""
         mode = plan["mode"]
         target_rel = plan["target_rel_path"]
         channel_abs = os.path.abspath(channel_path)
-
-        def _fallback() -> tuple[str, str, str]:
-            return "new", self._proposal_fallback_path(draft_content, attachment_name), ""
-
-        if not target_rel or not target_rel.endswith(".md"):
-            return _fallback()
-
+        def _fallback(): return "new", self._proposal_fallback_path(draft_content, attachment_name), ""
+        if not target_rel or not target_rel.endswith(".md"): return _fallback()
         candidate_abs = os.path.abspath(os.path.join(channel_path, target_rel))
         try:
-            if os.path.commonpath([candidate_abs, channel_abs]) != channel_abs:
-                logger.warning(f"file_proposal: rejected target_rel {target_rel!r} (escapes channel)")
-                return _fallback()
-        except ValueError:
-            logger.warning(f"file_proposal: rejected target_rel {target_rel!r} (commonpath failed)")
-            return _fallback()
-
+            if os.path.commonpath([candidate_abs, channel_abs]) != channel_abs: return _fallback()
+        except ValueError: return _fallback()
         if mode == "update":
-            if not os.path.exists(candidate_abs):
-                logger.info(
-                    f"file_proposal: planned update target {target_rel!r} missing on disk; "
-                    "flipping to new"
-                )
-                return _fallback()
-            with open(candidate_abs, "r") as f:
-                return "update", target_rel, f.read()
-
+            if not os.path.exists(candidate_abs): return _fallback()
+            with open(candidate_abs, "r") as f: return "update", target_rel, f.read()
         return "new", target_rel, ""
 
     async def _handle_file_proposal(self, message, attachment, advice: str = ""):
-        """Path B — user @mentioned the bot with a `.md` drop. LLM decides whether
-        to merge into an existing KB file or create a new one, then generates the
-        content and surfaces it through the proposal UI. `advice` is optional
-        steering text and may be empty — the mention itself is the trigger."""
         channel_name = message.channel.name
-
         draft_content = (await attachment.read()).decode("utf-8", errors="replace")
         if not draft_content.strip():
-            await message.channel.send(
-                f"⚠️ `{attachment.filename}` is empty — nothing to propose."
-            )
+            await message.channel.send(f"⚠️ `{attachment.filename}` is empty — nothing to propose.")
             return
-
-        kb_context = await asyncio.to_thread(
-            self.kb.get_channel_context, channel_name, draft_content[:300]
-        )
+        kb_context = await asyncio.to_thread(self.kb.get_channel_context, channel_name, draft_content[:300])
         tree_listing = self.kb.list_channel_tree(channel_name)
-
-        plan = await self.agent.plan_file_proposal(
-            draft_content=draft_content,
-            advice=advice,
-            kb_context=kb_context,
-            tree_listing=tree_listing,
-            channel_name=channel_name,
-        )
+        plan = await self.agent.plan_file_proposal(draft_content, advice, kb_context, tree_listing, channel_name)
         channel_path = self.kb.get_channel_path(channel_name)
-        mode, target_rel, existing_content = self._resolve_proposal_target(
-            channel_path, plan, draft_content, attachment.filename
-        )
-        rationale = plan["rationale"]
-
-        await message.channel.send(
-            f"💡 Generating proposal for `{attachment.filename}` → `{target_rel}` ({mode})..."
-        )
-
-        merged = await self.agent.merge_file_proposal(
-            draft_content=draft_content,
-            existing_content=existing_content,
-            advice=advice,
-            mode=mode,
-        )
-
-        # Sentinel escape: LLM rejects the update target after seeing fresh content.
+        mode, target_rel, existing_content = self._resolve_proposal_target(channel_path, plan, draft_content, attachment.filename)
+        await message.channel.send(f"💡 Generating proposal for `{attachment.filename}` → `{target_rel}` ({mode})...")
+        merged = await self.agent.merge_file_proposal(draft_content, existing_content, target_rel, advice, channel_name)
         if mode == "update" and merged.lstrip().startswith("NEW_FILE_INSTEAD"):
-            logger.info(f"file_proposal: merge rejected target {target_rel!r}; flipping to new")
             merged = merged.lstrip()[len("NEW_FILE_INSTEAD"):].lstrip("\n") or draft_content
             target_rel = self._proposal_fallback_path(draft_content, attachment.filename)
             mode, existing_content = "new", ""
-
         if not merged.strip():
-            await message.channel.send(
-                f"⚠️ Proposal generation returned empty content for `{attachment.filename}`."
-            )
+            await message.channel.send(f"⚠️ Proposal generation returned empty content.")
             return
-
-        pid = self._create_proposal(
-            channel_name=channel_name,
-            rel_path=target_rel,
-            existing_content=existing_content,
-            proposed_content=merged,
-            instruction=advice,
-            rationale=rationale,
-        )
+        pid = self._create_proposal(channel_name, target_rel, existing_content, merged, advice, plan["rationale"])
         await self._send_proposal(message.channel, pid)
-        logger.info(
-            f"**PROPOSE (FILE)**: `{attachment.filename}` -> `{target_rel}` ({mode}) in #{channel_name}",
-            message.guild,
-        )
-
-    # --- HELPERS ---
 
     async def _sync_kb_channels(self, guild):
-        """Create Discord channels for any KB folders that don't have a matching channel."""
         existing_names = {ch.name for ch in guild.text_channels}
         root = config.Paths.CHANNELS
-        try:
-            for entry in os.scandir(root):
-                if not entry.is_dir() or entry.name.startswith(".") or entry.name in self.RESERVED_CHANNELS:
-                    continue
-                channel_name = entry.name
-                self.kb.get_channel_path(channel_name)  # ensure stream_of_conscious.md exists
-                if channel_name not in existing_names:
-                    try:
-                        await guild.create_text_channel(channel_name)
-                        logger.info(f"Created Discord channel #{channel_name} for existing KB folder", guild)
-                    except Exception as e:
-                        logger.error(f"Could not create channel #{channel_name}: {e}", guild)
-        except Exception as e:
-            logger.error(f"Error syncing KB channels: {e}", guild)
+        for entry in os.scandir(root):
+            if not entry.is_dir() or entry.name.startswith(".") or entry.name in self.RESERVED_CHANNELS:
+                continue
+            if entry.name not in existing_names:
+                try: await guild.create_text_channel(entry.name)
+                except: pass
 
     async def _seed_channel_history(self, channel):
-        """Seed in-memory history from Discord message history on startup."""
         entries = []
         try:
             async for message in channel.history(limit=50, oldest_first=False):
-                if not message.content.strip():
-                    continue
+                if not message.content.strip(): continue
                 role = "assistant" if message.author == self.user else message.author.display_name
                 timestamp = message.created_at.strftime("%Y-%m-%d %H:%M")
                 entries.append(f"[{timestamp}] {role}:\n{message.content}\n\n")
-        except Exception as e:
-            logger.error(f"Could not seed history for #{channel.name}: {e}")
-            return
+        except: return
         if entries:
-            text = "".join(reversed(entries))  # oldest first
-            self.kb.seed_history(channel.name, text)
-            logger.info(f"Seeded #{channel.name} with {len(entries)} messages from Discord")
+            self.kb.seed_history(channel.name, "".join(reversed(entries)))
 
     async def _log_publisher(self):
-        """Background task to drain the internal log queue and send to Discord."""
         while True:
             msg = await self._log_queue.get()
-            try:
-                # We log to the first guild by default
-                if self.guilds:
-                    await self.send_system_log(self.guilds[0], msg)
-            except Exception as e:
-                # Don't use logger.error here or you'll loop!
-                print(f"Failed to send log to Discord: {e}")
-            finally:
-                self._log_queue.task_done()
+            if self.guilds:
+                await self.send_system_log(self.guilds[0], msg)
+            self._log_queue.task_done()
 
     async def close(self):
-        """Cleanly shut down: close GenAI client and cancel background tasks."""
-        if self._log_publisher_task and not self._log_publisher_task.done():
-            self._log_publisher_task.cancel()
-            try:
-                await self._log_publisher_task
-            except asyncio.CancelledError:
-                pass
-
-        if getattr(self, "mcp_pool", None):
-            await self.mcp_pool.close()
-
-        if self.agent:
-            self.agent.close()
+        if self._log_publisher_task: self._log_publisher_task.cancel()
+        if self.mcp_pool: await self.mcp_pool.close()
+        if self.agent: self.agent.close()
         await super().close()
 
     async def on_guild_join(self, guild):
-        """Enforce single-server constraint: leave immediately if already serving a server."""
         if self.kb is not None:
-            logger.error(
-                f"Attempted to join a second server '{guild.name}'. This bot is SINGLE-SERVER ONLY. Leaving.",
-                self.guilds[0]
-            )
             await guild.leave()
             return
-
         self.kb = KnowledgeBaseManager(guild.name)
         await self._ensure_reserved_channels(guild)
 
-    async def _ensure_channel(self, guild, name: str, init_message: str | None = None):
-        """Ensure a named text channel exists. Returns the channel (or None on
-        failure). Posts `init_message` only when the channel is first created."""
+    async def _ensure_channel(self, guild, name, init_message=None):
         channel = discord.utils.get(guild.text_channels, name=name)
         if not channel:
             try:
                 channel = await guild.create_text_channel(name)
-                if init_message:
-                    await channel.send(init_message)
-            except Exception as e:
-                logger.error(f"Error creating #{name} in {guild.name}: {e}")
+                if init_message: await channel.send(init_message)
+            except: pass
         return channel
 
     async def _ensure_reserved_channels(self, guild):
-        """Ensure every RESERVED_CHANNELS entry exists in the guild."""
         for name, greeting in self.RESERVED_CHANNELS.items():
             await self._ensure_channel(guild, name, greeting)
 
     async def send_system_log(self, guild, message):
-        """Internal method for logger to send to Discord."""
-        channel = await self._ensure_channel(
-            guild, "system-log", self.RESERVED_CHANNELS["system-log"]
-        )
-        if channel:
-            await channel.send(message)
+        channel = await self._ensure_channel(guild, "system-log")
+        if channel: await channel.send(message)
 
     async def send_message_safe(self, channel, content):
-        """Send a message, splitting into multiple parts if it exceeds Discord's 2000-char limit."""
-        if not content:
-            return
-        limit = 2000
-        while len(content) > limit:
-            split_at = content.rfind('\n', 0, limit)
-            if split_at == -1:
-                split_at = limit
-            chunk = content[:split_at].strip()
-            if chunk:
-                await channel.send(chunk)
+        if not content: return
+        while len(content) > 2000:
+            split_at = content.rfind('\n', 0, 2000)
+            if split_at == -1: split_at = 2000
+            await channel.send(content[:split_at].strip())
             content = content[split_at:].strip()
-        if content:
-            await channel.send(content)
-
-    # --- EVENT HANDLERS ---
+        if content: await channel.send(content)
 
     async def on_message(self, message):
-        if message.author == self.user:
-            return
-
-        channel_name = message.channel.name
-        if channel_name in self.RESERVED_CHANNELS:
-            return
-
+        if message.author == self.user or message.channel.name in self.RESERVED_CHANNELS: return
         for handler in self.message_handlers:
-            if await handler.handle(message, self):
-                break
-
-
-def _preflight_check():
-    """
-    Verify all required dependencies are installed and API keys are valid.
-    Uses lightweight checks to avoid redundant manager initialization.
-    """
-    logger.info("Preflight: checking PageIndex install...")
-    try:
-        from pageindex import PageIndexClient
-    except ImportError:
-        raise RuntimeError("PageIndex is not installed. Run: pip install pageindex")
-
-    logger.info("Preflight: checking OpenViking install...")
-    try:
-        import openviking as ov
-    except ImportError:
-        raise RuntimeError("OpenViking is not installed. Run: pip install openviking")
-
-    logger.info("Preflight: checking GitPython install...")
-    try:
-        import git
-    except ImportError:
-        raise RuntimeError("GitPython is not installed. Run: pip install GitPython")
-
-    # API Key Validation (Minimal live calls)
-    try:
-        logger.info("Preflight: validating PageIndex API key (list_documents)...")
-        pi_client = PageIndexClient(api_key=config.Auth.PAGEINDEX_API_KEY)
-        pi_client.list_documents(limit=1)
-
-        logger.info("Preflight: initializing OpenViking client...")
-        os.environ.setdefault("OPENVIKING_CONFIG_FILE", config.Paths.VIKING_CONF)
-        ov_client = ov.SyncOpenViking(path=config.Paths.VIKING_DATA)
-        ov_client.initialize()
-        logger.info("Preflight: probing OpenViking with test query...")
-        ov_client.find("preflight check", limit=1)
-        ov_client.close()
-    except Exception as e:
-        raise RuntimeError(f"API key validation failed: {e}")
-
-    # MCP servers — connect once to verify reachability and advertise tool counts.
-    # Per-server failures are logged but do not abort startup (matches runtime
-    # pool behavior: a transient MCP outage shouldn't take the bot down).
-    if config.MCP.SERVERS:
-        logger.info(f"Preflight: probing {len(config.MCP.SERVERS)} MCP server(s)...")
-        import mcp_bridge
-
-        async def _probe_mcp():
-            pool = mcp_bridge.MCPSessionPool(config.MCP.SERVERS)
-            await pool.connect()
-            try:
-                for name, tool_names in pool.tool_lists.items():
-                    logger.info(
-                        f"Preflight: MCP — {name} exposes {len(tool_names)} tool(s)"
-                    )
-                connected = len(pool.sessions)
-                total = len(config.MCP.SERVERS)
-                if connected == 0:
-                    logger.warning(f"Preflight: MCP — 0/{total} servers reachable")
-                else:
-                    logger.info(f"Preflight: MCP — {connected}/{total} servers reachable")
-            finally:
-                await pool.close()
-
-        asyncio.run(_probe_mcp())
-    else:
-        logger.debug("Preflight: no MCP servers configured, skipping probe")
-
-    logger.info("Preflight: all checks passed")
-
-
-def _startup_indexing():
-    """
-    Perform blocking Knowledge Base indexing BEFORE launching the Discord bot.
-    This ensures Viking and PageIndex are ready without stalling the Discord heartbeat.
-    """
-    logger.info("Startup Indexing: initializing Viking and PageIndex...")
-    from viking import VikingContextManager
-    from pageindex_manager import PageIndexManager
-
-    viking = VikingContextManager(config.Paths.CHANNELS)
-    pageindex = PageIndexManager()
-
-    logger.info("Startup Indexing: running OpenViking rebuild_index (blocking)...")
-    viking.rebuild_index()
-
-    logger.info("Startup Indexing: running PageIndex rebuild_index (blocking)...")
-    pageindex.rebuild_index(config.Paths.CHANNELS)
-    
-    # Clean up the sync clients before starting the async bot
-    viking.close()
-    logger.info("Startup Indexing: complete.")
-
-
-if __name__ == "__main__":
-    logger.info("========== Launching..... ==========")
-    required_vars = {
-        "DISCORD_TOKEN": config.Auth.DISCORD_TOKEN,
-        "GEMINI_API_KEY": config.Auth.GEMINI_API_KEY,
-        "PAGEINDEX_API_KEY": config.Auth.PAGEINDEX_API_KEY,
-    }
-
-    missing = [var for var, val in required_vars.items() if not val]
-    if missing:
-        logger.error(f"❌ Missing required environment variables: {', '.join(missing)}")
-        logger.error("Please ensure they are exported in your ZSH environment (~/.zshrc).")
-        exit(1)
-
-    try:
-        _preflight_check()
-        _startup_indexing()
-    except Exception as e:
-        logger.error(f"❌ Pre-launch check or indexing failed: {e}")
-        exit(1)
-
-    logger.info("✅ Startup ready. Launching MindSpace Bot...")
-    intents = discord.Intents.default()
-    intents.message_content = True
-    bot = MindSpaceBot(intents=intents)
-    bot.run(config.Auth.DISCORD_TOKEN)
+            if await handler.handle(message, self): break

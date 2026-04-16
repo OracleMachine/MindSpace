@@ -17,8 +17,8 @@ import os
 from contextlib import AsyncExitStack
 from typing import Optional
 
-import config
-from logger import logger
+from mindspace.core import config
+from mindspace.core.logger import logger
 
 
 def sync_cli_settings() -> None:

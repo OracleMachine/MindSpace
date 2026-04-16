@@ -1,10 +1,10 @@
 import os
 import datetime
 import git
-import config
-from viking import VikingContextManager
-from pageindex_manager import PageIndexManager
-from logger import logger
+from mindspace.core import config
+from mindspace.knowledgebase.viking import VikingContextManager
+from mindspace.knowledgebase.pageindex import PageIndexManager
+from mindspace.core.logger import logger
 
 class KnowledgeBaseManager:
     """

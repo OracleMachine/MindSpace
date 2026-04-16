@@ -3,8 +3,8 @@ import json
 import time
 import glob as glob_module
 from pageindex import PageIndexClient
-import config
-from logger import logger
+from mindspace.core import config
+from mindspace.core.logger import logger
 
 
 _INDEX_FILE = os.path.join(config.Storage.BASE_PATH, ".pageindex_index.json")

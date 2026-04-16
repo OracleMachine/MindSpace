@@ -10,7 +10,7 @@ except ImportError:
 
 _CONFIG_PATH = os.environ.get(
     "MINDSPACE_CONFIG",
-    os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config.yaml"),
+    os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))), "config.yaml"),
 )
 
 with open(_CONFIG_PATH, "r") as f:

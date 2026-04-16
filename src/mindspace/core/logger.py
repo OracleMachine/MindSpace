@@ -2,7 +2,7 @@ import logging
 import logging.handlers
 import os
 
-import config
+from mindspace.core import config
 
 # --- Standard Logging Setup ---
 _STREAM_LEVEL = getattr(logging, config.Log.STREAM_LEVEL, logging.INFO)

@@ -1,8 +1,8 @@
 import os
 from pathlib import Path
 import openviking as ov  # hard import — fails fast if package not installed
-import config
-from logger import logger
+from mindspace.core import config
+from mindspace.core.logger import logger
 
 
 class VikingContextManager:

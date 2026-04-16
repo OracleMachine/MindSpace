@@ -1,15 +1,9 @@
-import os
-import re
-import asyncio
-import functools
-import inspect
-import datetime
-from typing import Protocol, List, TYPE_CHECKING
+from typing import Protocol, TYPE_CHECKING
 import discord
-from logger import logger
+from mindspace.core.logger import logger
 
 if TYPE_CHECKING:
-    from Agent.bot import MindSpaceBot
+    from mindspace.bot.client import MindSpaceBot
 
 class MessageHandler(Protocol):
     async def handle(self, message: discord.Message, bot: 'MindSpaceBot') -> bool:
