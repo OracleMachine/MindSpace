@@ -1,6 +1,7 @@
 from typing import Protocol, TYPE_CHECKING
 import discord
 from mindspace.core.logger import logger
+from mindspace.bot import services
 
 if TYPE_CHECKING:
     from mindspace.bot.client import MindSpaceBot
@@ -23,33 +24,38 @@ class ActiveCommandHandler:
             await bot.handle_help(message.guild)
             return True
 
-        # Registry for simple routing
-        commands = {
-            "organize": (bot.handle_organize, False, None),
-            "consolidate": (bot.handle_consolidate, False, None),
-            "research": (bot.handle_research, True, "Usage: `!research [topic]`"),
-            "omni": (bot.handle_omni, True, "Usage: `!omni [query]`"),
-            "sync": (bot.handle_sync, False, "Usage: `!sync` (takes no arguments)"),
-            "change_my_view": (bot.handle_change_my_view, True, "Usage: `!change_my_view [instruction]`"),
-        }
-
-        if cmd not in commands:
-            return False
-
-        method, needs_args, usage = commands[cmd]
-        
-        if needs_args and not args:
-            await message.channel.send(usage)
-        elif cmd == "sync" and args:
-            await message.channel.send(usage)
-        else:
-            if cmd == "research":
-                await method(message.channel, message.guild, args, message.id)
-            elif needs_args:
-                await method(message.channel, message.guild, args)
+        if cmd == "organize":
+            await services.handle_organize(bot, message.channel, message.guild)
+            return True
+        if cmd == "consolidate":
+            await services.handle_consolidate(bot, message.channel, message.guild)
+            return True
+        if cmd == "research":
+            if not args:
+                await message.channel.send("Usage: `!research [topic]`")
             else:
-                await method(message.channel, message.guild)
-        return True
+                await services.handle_research(bot, message.channel, message.guild, args)
+            return True
+        if cmd == "omni":
+            if not args:
+                await message.channel.send("Usage: `!omni [query]`")
+            else:
+                await services.handle_omni(bot, message.channel, message.guild, args)
+            return True
+        if cmd == "sync":
+            if args:
+                await message.channel.send("Usage: `!sync` (takes no arguments)")
+            else:
+                await bot.handle_sync(message.channel, message.guild)
+            return True
+        if cmd == "change_my_view":
+            if not args:
+                await message.channel.send("Usage: `!change_my_view [instruction]`")
+            else:
+                await services.handle_change_my_view(bot, message.channel, message.guild, args)
+            return True
+
+        return False
 
     async def _delete_quietly(self, message):
         try: await message.delete()
@@ -58,7 +64,7 @@ class ActiveCommandHandler:
 class KnowledgeIngestionHandler:
     async def handle(self, message: discord.Message, bot: 'MindSpaceBot') -> bool:
         if "http://" in message.content or "https://" in message.content:
-            await bot.handle_url_ingest(message)
+            await message.channel.send("🌐 URL detected. Please paste the content manually for ingestion.")
             return True
 
         if message.attachments:

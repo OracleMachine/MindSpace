@@ -1,5 +1,7 @@
 import os
 import datetime
+import threading
+from pathlib import Path
 import git
 from mindspace.core import config
 from mindspace.knowledgebase.viking import VikingContextManager
@@ -23,6 +25,7 @@ class KnowledgeBaseManager:
         logger.info("KB: initializing PageIndexManager (cloud client)...")
         self.pageindex = PageIndexManager()
         self._history_cache = {}  # channel_name → bounded history string
+        self._git_lock = threading.Lock()
         logger.info("KB: initialization complete")
 
     def _sanitize_name(self, name):
@@ -61,7 +64,8 @@ class KnowledgeBaseManager:
         try:
             with open(view_file, "r") as f:
                 return f.read().strip()
-        except Exception:
+        except Exception as e:
+            logger.error(f"Failed to read view.md for {channel_name}: {e}")
             return ""
 
     def write_file(self, file_path, content):
@@ -82,14 +86,15 @@ class KnowledgeBaseManager:
         """
         Commit changes under Channels/ only.
         """
-        channels_rel = os.path.relpath(self.channels_path, self.root_path)
+        with self._git_lock:
+            channels_rel = os.path.relpath(self.channels_path, self.root_path)
 
-        # Stage ONLY Channels/
-        self._repo.git.add(channels_rel)
-        try:
-            self._repo.index.commit(message)
-        except Exception as e:
-            logger.warning(f"Git commit failed (likely no changes): {e}")
+            # Stage ONLY Channels/
+            self._repo.git.add(channels_rel)
+            try:
+                self._repo.index.commit(message)
+            except Exception as e:
+                logger.warning(f"Git commit failed (likely no changes): {e}")
 
     def index_files(self, file_rel_paths):
         """Index specific files in OpenViking and PageIndex."""
@@ -111,28 +116,35 @@ class KnowledgeBaseManager:
             elif abs_path.endswith(".pdf"):
                 try:
                     self.pageindex.index_document(abs_path, channel_name)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.error(f"Failed to index PDF {abs_path}: {e}")
 
     def save_state(self, message):
         """
         Orchestrate persistence: Commit changes to Git, then lazily re-index
         the touched files in OpenViking and PageIndex.
         """
-        channels_rel = os.path.relpath(self.channels_path, self.root_path)
+        with self._git_lock:
+            channels_rel = os.path.relpath(self.channels_path, self.root_path)
 
-        # Find modified and untracked files before staging, scoped to Channels/.
-        changed_files = [
-            item.a_path for item in self._repo.index.diff(None)
-            if item.a_path.startswith(channels_rel + os.sep) or item.a_path == channels_rel
-        ]
-        untracked = [
-            p for p in self._repo.untracked_files
-            if p.startswith(channels_rel + os.sep) or p == channels_rel
-        ]
-        to_index = set(changed_files + untracked)
+            # Find modified and untracked files before staging, scoped to Channels/.
+            changed_files = [
+                item.a_path for item in self._repo.index.diff(None)
+                if item.a_path.startswith(channels_rel + os.sep) or item.a_path == channels_rel
+            ]
+            untracked = [
+                p for p in self._repo.untracked_files
+                if p.startswith(channels_rel + os.sep) or p == channels_rel
+            ]
+            to_index = set(changed_files + untracked)
 
-        self.git_commit(message)
+            # Stage ONLY Channels/
+            self._repo.git.add(channels_rel)
+            try:
+                self._repo.index.commit(message)
+            except Exception as e:
+                logger.warning(f"Git commit failed (likely no changes): {e}")
+
         self.index_files(to_index)
 
     def get_channel_context(self, channel_name: str, query: str = "") -> str:
