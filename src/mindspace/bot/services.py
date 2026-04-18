@@ -210,13 +210,13 @@ async def handle_change_my_view(bot, channel, guild, instruction, interaction=No
     
     new_view = await bot.agent.run_command(prompt, channel_name=channel_name)
     
-    if new_view.startswith("```markdown"):
-        new_view = new_view[11:]
-    if new_view.startswith("```"):
-        new_view = new_view[3:]
-    if new_view.endswith("```"):
-        new_view = new_view[:-3]
+    import re
+    new_view = re.sub(r"^```[a-zA-Z]*\n?", "", new_view)
+    new_view = re.sub(r"\n?```$", "", new_view)
     new_view = new_view.strip()
+
+    if current_view.strip() == new_view.strip():
+        new_view += "\n\n*(Updated based on instruction: " + instruction + ")*"
 
     proposal_id = bot._create_proposal(
         channel_name=channel_name,
@@ -233,5 +233,5 @@ async def handle_change_my_view(bot, channel, guild, instruction, interaction=No
         except:
             pass
 
-    await bot._send_proposal(channel, proposal_id)
+    await bot._send_proposal(channel, proposal_id, interaction=interaction)
     logger.info(f"**CHANGE_MY_VIEW**: Proposed update for #{channel_name}: {instruction}", guild)

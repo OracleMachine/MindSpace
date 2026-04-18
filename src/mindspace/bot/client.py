@@ -261,7 +261,7 @@ class MindSpaceBot(discord.Client):
         }
         return proposal_id
 
-    async def _send_proposal(self, channel, proposal_id: str):
+    async def _send_proposal(self, channel, proposal_id: str, interaction: discord.Interaction = None):
         proposal = self._pending_proposals.get(proposal_id)
         if not proposal:
             return
@@ -274,7 +274,19 @@ class MindSpaceBot(discord.Client):
             proposal["rel_path"], proposal["rationale"], diff_text
         )
         view = ProposalView(self, proposal_id)
-        await channel.send(content=content, embed=embed, view=view, file=file)
+        if interaction:
+            try:
+                await interaction.edit_original_response(
+                    content=content,
+                    embed=embed,
+                    attachments=[file] if file else [],
+                    view=view
+                )
+            except discord.HTTPException as e:
+                logger.warning(f"Failed to edit interaction response: {e}")
+                await channel.send(content=content, embed=embed, view=view, file=file)
+        else:
+            await channel.send(content=content, embed=embed, view=view, file=file)
 
     async def handle_propose_update(self, channel_name: str, rel_path: str, instruction: str, rationale: str):
         if rel_path.lower() == "view.md":
