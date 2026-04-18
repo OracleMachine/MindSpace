@@ -4,7 +4,7 @@
 
 ## How messages are processed
 - **Plain text** → Passive dialogue. The bot replies using tool-based KB retrieval and may record insights via `record_thought`.
-- **URL** → Auto-snapshotted as a Markdown file into the current channel's KB folder.
+- **URL** → The bot will instruct you to paste the content manually for ingestion.
 - **File drop** → Autoroute into a content-chosen subfolder, *or* a reviewed proposal when you @mention the bot on a `.md` file. See the next section for the full workflow.
 
 ## File drops in detail

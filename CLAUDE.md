@@ -40,7 +40,9 @@ Thought/
 
 ### Module Responsibilities
 
-- **`bot.py`** — `MindSpaceBot(discord.Client)`: The entry point. Handles `on_message` and routes to commands (`!organize`, `!consolidate`, `!research`, `!omni`), URL ingestion, file ingestion, or passive dialogue. Wraps tools with async progress decorators for Discord status updates.
+- **`bot.py`** — `MindSpaceBot(discord.Client)`: The entry point. Handles `on_message` and routes to commands (delegated to `services.py`), file ingestion, or passive dialogue. Wraps tools with async progress decorators for Discord status updates.
+- **`services.py`** — Contains the core business logic for all active commands (`!organize`, `!consolidate`, `!research`, `!omni`, `!change_my_view`).
+- **`prompts.py`** — Centralized repository for all LLM prompt templates used by the agent and services.
 - **`agent.py`** — `MindSpaceAgent`: Dual-brain LLM abstraction. `GoogleGenAIBrain` for dialogue (async chat via `achat`, URL/file analysis, commit messages). `GeminiCLIBrain` for commands — owns the `gemini -y` subprocess, env (`GEMINI_CLI_HOME`) and args injection, and exposes `stream(prompt, cwd)` -> `CliStream` async-iterable handle.
 - **`tools.py`** — `MindSpaceTools`: closure-bound tool functions exposed to the LLM during passive dialogue (`list_channel_files`, `search_channel_knowledge_base`, `search_global_knowledge_base`, `list_global_files`, `record_thought`).
 - **`manager.py`** — `KnowledgeBaseManager`: All filesystem and Git operations. Creates per-server repos, manages channel folders, appends thoughts, and performs `git commit` after every active command.
@@ -75,7 +77,7 @@ Install: `pip install openviking pageindex`
 | `!consolidate` | Synthesizes `stream_of_conscious.md` into a dated article, clears stream, sends file to Discord |
 | `!research [topic]` | Generates a cited research paper using KB context, saves and sends to Discord |
 | `!omni [query]` | Cross-KB synthesis across all channel folders, saves and sends to Discord |
-| URL in message | Fetches page, converts to Markdown snapshot, git commits |
+| URL in message | Replies instructing user to paste content manually |
 | File attachment | Saves and analyzes file, git commits |
 | Plain text | Passive dialogue: replies via tool-based KB retrieval + records insights via `record_thought` tool |
 

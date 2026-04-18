@@ -102,7 +102,7 @@ The bot supports both **Slash Commands** (`/command`) and **Prefix Commands** (`
 ### Knowledge Ingestion Workflows
 
 1. **Active Dialogue (Tool-First)**: The dialogue brain has no pre-loaded KB context. When you ask a factual question, the model calls `search_channel_knowledge_base` to retrieve relevant data from OpenViking. Insights are recorded via the `record_thought` tool call (not parsed from the reply). Progress is shown live in a Discord status message.
-2. **URL Snapshots**: Paste a URL (HTTP/HTTPS) to have the bot fetch the page content, clean it into Markdown, and save it to the channel folder as a `WEBPAGE-*.md` file.
+2. **URL Ingestion**: Paste a URL (HTTP/HTTPS) and the bot will remind you to paste the content manually for ingestion.
 3. **File Indexing**: Upload a PDF or other file. The bot saves it locally and uses **PageIndex** to index its content for future `!research` or `!omni` queries.
 4. **Git Versioning**: Every major action (ingestion, organization, consolidation) triggers an automatic Git commit with an LLM-generated message.
 
