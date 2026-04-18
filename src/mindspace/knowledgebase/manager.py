@@ -192,6 +192,9 @@ class KnowledgeBaseManager:
 
     def index_files(self, file_rel_paths):
         """Index specific files in OpenViking and PageIndex."""
+        if not file_rel_paths:
+            return
+
         channels_abs = os.path.abspath(self.channels_path)
         for file_rel_path in file_rel_paths:
             abs_path = os.path.abspath(os.path.join(self.root_path, file_rel_path))
@@ -201,13 +204,16 @@ class KnowledgeBaseManager:
                 continue  # not under Channels/ — skip
 
             channel_name = os.path.relpath(abs_path, channels_abs).split(os.sep)[0]
+            filename = os.path.basename(abs_path)
 
             # Re-index .md in Viking
             if abs_path.endswith(".md"):
+                logger.info(f"⚙️ OpenViking: Indexing {filename}...")
                 self.viking.index_file(abs_path, channel_name)
 
             # Re-index .pdf in PageIndex
             elif abs_path.endswith(".pdf"):
+                logger.info(f"⚙️ PageIndex: Indexing {filename}...")
                 try:
                     self.pageindex.index_document(abs_path, channel_name)
                 except Exception as e:

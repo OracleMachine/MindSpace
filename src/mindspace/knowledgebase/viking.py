@@ -21,9 +21,9 @@ class VikingContextManager:
         os.environ.setdefault("OPENVIKING_CONFIG_FILE", config.Paths.VIKING_CONF)
         logger.info(f"Viking: constructing SyncOpenViking(path={config.Paths.VIKING_DATA})...")
         self.client = ov.SyncOpenViking(path=config.Paths.VIKING_DATA)
-        logger.info("Viking: calling client.initialize()...")
+        logger.info("⚙️ OpenViking: Initializing storage engine... (This can take a few seconds on first boot)")
         self.client.initialize()
-        logger.info("Viking: client initialized")
+        logger.info("✅ OpenViking: Engine ready")
 
     def _ensure_channel_dir(self, channel_name: str) -> str:
         """
@@ -72,11 +72,11 @@ class VikingContextManager:
         if channel_name:
             target_path = os.path.join(self.root_path, channel_name)
             parent_uri = f"viking://resources/{channel_name}/"
-            logger.info(f"OpenViking: Syncing channel #{channel_name}...")
+            logger.info(f"⚙️ OpenViking: Syncing channel #{channel_name}...")
         else:
             target_path = self.root_path
             parent_uri = "viking://resources/"
-            logger.info("OpenViking: Syncing entire Knowledge Base (Channels/)...")
+            logger.info("⚙️ OpenViking: Syncing entire Knowledge Base...")
 
         try:
             # OpenViking walks the dir and uses local CPU hashes to skip unchanged files (0 tokens).
@@ -88,9 +88,9 @@ class VikingContextManager:
             )
             self.client.add_resource(path=target_path, parent=parent_uri, exclude=exclude_patterns)
             self.client.wait_processed()
-            logger.info(f"OpenViking: Sync complete for {target_path}")
+            logger.info(f"✅ OpenViking: Sync complete for {target_path}")
         except Exception as e:
-            logger.error(f"OpenViking: Sync failed: {e}")
+            logger.error(f"❌ OpenViking: Sync failed: {e}")
 
     def _safe_search(self, query: str, target_uri: str, limit: int, channel_name: str = None, is_retry: bool = False) -> str:
         """
@@ -137,7 +137,7 @@ class VikingContextManager:
                 continue
 
         if stale_detected and not is_retry:
-            logger.info("OpenViking: Stale results found. Syncing Knowledge Base and retrying search...")
+            logger.info("⚠️ OpenViking: Stale results found. Re-syncing Knowledge Base to ensure accuracy... (This might take a few seconds)")
             # Synchronous sync (O(N) CPU hash check, 0 tokens for unchanged files)
             self.rebuild_index(channel_name)
             # Retry the search exactly once
@@ -171,3 +171,5 @@ class VikingContextManager:
 
 def _sanitize(name: str) -> str:
     return name.replace(" ", "_").replace("-", "_")
+.replace(" ", "_").replace("-", "_")
+, "_")

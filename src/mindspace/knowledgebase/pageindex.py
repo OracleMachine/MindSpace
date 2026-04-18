@@ -77,10 +77,12 @@ class PageIndexManager:
 
         # Wait for processing (async API)
         deadline = time.time() + _POLL_TIMEOUT
+        logger.info(f"⏳ PageIndex: Processing {os.path.basename(file_path)}...")
         while not self.client.is_retrieval_ready(doc_id):
             if time.time() > deadline:
                 raise TimeoutError(f"PageIndex processing timed out for {file_path}")
             time.sleep(_POLL_INTERVAL)
+        logger.info(f"✅ PageIndex: {os.path.basename(file_path)} is now ready for deep Q&A")
 
         self._index["documents"][file_path] = doc_id
         self._save_index()
