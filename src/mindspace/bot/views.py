@@ -78,7 +78,19 @@ class ProposalView(discord.ui.View):
         commit_msg = await self.bot.agent.generate_commit_message(
             f"KB update: {proposal['rel_path']} — {proposal['rationale']}"
         )
-        await asyncio.to_thread(self.bot.kb.save_state, commit_msg)
+
+        # Direction-gate the post-commit challenger: a view.md acceptance only
+        # fires the upward consistency cascade; anything else fires the
+        # per-folder local challenge.
+        is_view_commit = os.path.basename(proposal["rel_path"]).lower() == "view.md"
+        if is_view_commit:
+            rel_folder = os.path.dirname(proposal["rel_path"])
+            view_scope = (proposal["channel_name"], rel_folder)
+        else:
+            view_scope = None
+        await self.bot.save_and_challenge(
+            interaction.channel, interaction.guild, commit_msg, view_scope=view_scope
+        )
 
         await interaction.edit_original_response(
             content=f"✅ **Applied proposal:** {proposal['rationale']}\n*(Written, indexed, and committed)*", view=None

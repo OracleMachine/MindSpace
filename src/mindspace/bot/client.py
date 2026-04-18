@@ -98,8 +98,38 @@ class MindSpaceBot(discord.Client):
         """Unified helper to write file and commit state."""
         self.kb.write_file(file_path, content)
         commit_msg = await self.agent.generate_commit_message(action_desc)
-        await asyncio.to_thread(self.kb.save_state, commit_msg)
+        await self.save_and_challenge(channel, channel.guild, commit_msg)
         return commit_msg
+
+    async def save_and_challenge(self, channel, guild, message: str,
+                                  view_scope: tuple[str, str] | None = None) -> dict:
+        """Commit and fire the view-tree challenger in the background.
+
+        - view_scope=None (default): content commit. For each folder touched in
+          this commit within `channel`'s KB folder, fire a local-view challenge.
+        - view_scope=(channel_name, rel_folder): a view.md was just committed at
+          that scope — fire the upward consistency cascade instead.
+
+        Returns the save_state result dict.
+        """
+        result = await asyncio.to_thread(self.kb.save_state, message)
+        touched = result.get("touched", set())
+        try:
+            if view_scope is not None:
+                vchan, vrel = view_scope
+                asyncio.create_task(
+                    services.check_upward_consistency(self, channel, guild, vchan, vrel)
+                )
+            else:
+                for (chan_name, rel_folder) in touched:
+                    if chan_name != channel.name:
+                        continue
+                    asyncio.create_task(
+                        services.challenge_local_view(self, channel, guild, chan_name, rel_folder)
+                    )
+        except Exception as e:
+            logger.warning(f"save_and_challenge: scheduling challenger failed: {e}")
+        return result
 
     async def handle_attachment_ingest(self, message):
         mentioned = self.user.mentioned_in(message)
@@ -289,8 +319,10 @@ class MindSpaceBot(discord.Client):
             await channel.send(content=content, embed=embed, view=view, file=file)
 
     async def handle_propose_update(self, channel_name: str, rel_path: str, instruction: str, rationale: str):
-        if rel_path.lower() == "view.md":
-            return "Error: `view.md` is a protected system file and can only be modified via `!change_my_view`."
+        # view.md at any depth is managed exclusively by the view-tree challenger
+        # and /change_my_view. Dialogue tools cannot propose updates to it directly.
+        if os.path.basename(rel_path).lower() == "view.md":
+            return "Error: `view.md` files are managed by the view challenger and `/change_my_view` — dialogue cannot propose updates to them directly."
         
         channel_path = self.kb.get_channel_path(channel_name)
         abs_path = os.path.abspath(os.path.join(channel_path, rel_path))
@@ -398,7 +430,7 @@ class MindSpaceBot(discord.Client):
         commit_msg = await self.agent.generate_commit_message(
             f"Ingested file into #{channel_name}: {rel}"
         )
-        await asyncio.to_thread(self.kb.save_state, commit_msg)
+        await self.save_and_challenge(message.channel, message.guild, commit_msg)
 
         summary_tail = f"\n> {analysis}" if analysis else ""
         await self.send_message_safe(

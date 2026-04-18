@@ -7,6 +7,178 @@ from mindspace.core import config
 from mindspace.core.logger import logger
 from mindspace.agent import prompts
 
+
+def _view_rel_path(rel_folder: str) -> str:
+    return os.path.join(rel_folder, "view.md") if rel_folder else "view.md"
+
+
+def _scope_label(channel_name: str, rel_folder: str) -> str:
+    return f"#{channel_name}/{rel_folder}" if rel_folder else f"#{channel_name}"
+
+
+async def _run_distill_prompt(bot, channel_name: str, rel_folder: str,
+                               current_view: str, local_context: str) -> str:
+    prompt = prompts.DISTILL_LOCAL_VIEW_PROMPT.format(
+        channel_name=channel_name,
+        rel_folder=rel_folder or "<channel-root>",
+        current_view=current_view or "(none yet)",
+        local_context=local_context or "(empty)",
+    )
+    out = await bot.agent.brain.run_command_async(prompt)
+    return (out or "").strip()
+
+
+async def _run_conflict_prompt(bot, parent_scope: str, parent_view: str,
+                                child_scope: str, child_view: str,
+                                target_label: str) -> str:
+    prompt = prompts.DETECT_VIEW_CONFLICT_PROMPT.format(
+        parent_scope=parent_scope,
+        parent_view=parent_view,
+        child_scope=child_scope,
+        child_view=child_view,
+        target_label=target_label,
+    )
+    out = await bot.agent.brain.run_command_async(prompt)
+    return (out or "").strip()
+
+
+async def challenge_local_view(bot, channel, guild, channel_name: str, rel_folder: str):
+    """Re-challenge a folder's local view against its evidence files. Emit a proposal
+    on drift. Lazy-bootstraps a view if none exists yet but the folder has content."""
+    local_context = bot.kb.read_folder_context(channel_name, rel_folder)
+    if not local_context:
+        return
+    current_view = bot.kb.read_view(channel_name, rel_folder)
+    try:
+        proposed = await _run_distill_prompt(bot, channel_name, rel_folder, current_view, local_context)
+    except Exception as e:
+        logger.warning(f"challenge_local_view: LLM failure at {_scope_label(channel_name, rel_folder)}: {e}")
+        return
+    if not proposed or proposed == "VIEW_OK" or proposed == current_view.strip():
+        return
+    rel_path = _view_rel_path(rel_folder)
+    pid = bot._create_proposal(
+        channel_name=channel_name,
+        rel_path=rel_path,
+        existing_content=current_view,
+        proposed_content=proposed,
+        instruction=f"Agent challenge: reconcile local view at `{rel_folder or '<root>'}` with new evidence.",
+        rationale=f"Local view drift detected in `{rel_folder or '<channel-root>'}`.",
+    )
+    await bot._send_proposal(channel, pid)
+    logger.info(f"**VIEW_CHALLENGE**: proposal emitted for {rel_path} in #{channel_name}", guild)
+
+
+async def check_upward_consistency(bot, channel, guild, channel_name: str, rel_folder: str):
+    """After a view.md update, walk upward and emit a proposal per parent whose stance
+    now conflicts with the updated descendant."""
+    child_rel = (rel_folder or "").strip("/").strip()
+    child_view = bot.kb.read_view(channel_name, child_rel)
+    if not child_view:
+        return
+    child_scope = _scope_label(channel_name, child_rel)
+    parent = os.path.dirname(child_rel) if child_rel else None
+    while parent is not None:
+        parent_view = bot.kb.read_view(channel_name, parent)
+        if parent_view:
+            parent_scope = _scope_label(channel_name, parent)
+            target_label = f"the parent view at {parent_scope}"
+            try:
+                proposed = await _run_conflict_prompt(
+                    bot,
+                    parent_scope=parent_scope, parent_view=parent_view,
+                    child_scope=child_scope, child_view=child_view,
+                    target_label=target_label,
+                )
+            except Exception as e:
+                logger.warning(f"check_upward_consistency: LLM failure at {parent_scope}: {e}")
+                proposed = ""
+            if proposed and proposed != "VIEW_OK" and proposed != parent_view.strip():
+                rel_path = _view_rel_path(parent)
+                pid = bot._create_proposal(
+                    channel_name=channel_name,
+                    rel_path=rel_path,
+                    existing_content=parent_view,
+                    proposed_content=proposed,
+                    instruction=f"Consistency: align parent view at `{parent or '<root>'}` with descendant at `{child_rel or '<root>'}`.",
+                    rationale=f"Conflict detected between {child_scope} and {parent_scope}.",
+                )
+                await bot._send_proposal(channel, pid)
+                logger.info(f"**VIEW_CONSISTENCY**: parent proposal at {rel_path} for #{channel_name}", guild)
+        if parent == "":
+            break
+        parent = os.path.dirname(parent)
+
+
+async def check_downward_consistency(bot, channel, guild, channel_name: str, rel_folder: str):
+    """After a parent view update, walk each descendant view and emit a proposal per
+    child whose stance now conflicts."""
+    parent_rel = (rel_folder or "").strip("/").strip()
+    parent_view = bot.kb.read_view(channel_name, parent_rel)
+    if not parent_view:
+        return
+    parent_scope = _scope_label(channel_name, parent_rel)
+    root = os.path.join(bot.kb.channels_path, channel_name)
+    if not os.path.isdir(root):
+        return
+    parent_prefix = parent_rel + os.sep if parent_rel else ""
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = sorted(d for d in dirnames if not d.startswith("."))
+        if "view.md" not in filenames:
+            continue
+        rel = os.path.relpath(dirpath, root)
+        rel = "" if rel == "." else rel
+        if rel == parent_rel:
+            continue
+        if parent_prefix and not rel.startswith(parent_prefix):
+            continue
+        child_view = bot.kb.read_view(channel_name, rel)
+        if not child_view:
+            continue
+        child_scope = _scope_label(channel_name, rel)
+        target_label = f"the child view at {child_scope}"
+        try:
+            proposed = await _run_conflict_prompt(
+                bot,
+                parent_scope=parent_scope, parent_view=parent_view,
+                child_scope=child_scope, child_view=child_view,
+                target_label=target_label,
+            )
+        except Exception as e:
+            logger.warning(f"check_downward_consistency: LLM failure at {child_scope}: {e}")
+            continue
+        if proposed and proposed != "VIEW_OK" and proposed != child_view.strip():
+            rel_path = _view_rel_path(rel)
+            pid = bot._create_proposal(
+                channel_name=channel_name,
+                rel_path=rel_path,
+                existing_content=child_view,
+                proposed_content=proposed,
+                instruction=f"Consistency: align child view at `{rel or '<root>'}` with parent at `{parent_rel or '<root>'}`.",
+                rationale=f"Conflict detected between {parent_scope} and {child_scope}.",
+            )
+            await bot._send_proposal(channel, pid)
+            logger.info(f"**VIEW_CONSISTENCY**: child proposal at {rel_path} for #{channel_name}", guild)
+
+
+async def handle_walkthrough_views(bot, channel, guild, interaction=None):
+    """Walk every content folder in the current channel: re-challenge local views and
+    run a downward consistency sweep from the channel root."""
+    channel_name = channel.name
+    await bot.send_message_safe(
+        channel, f"🌳 Walking view tree for #{channel_name}...", interaction=interaction
+    )
+    folders = bot.kb.list_subfolders_with_content(channel_name)
+    if not folders:
+        await bot.send_message_safe(
+            channel, f"#{channel_name} has no content folders to challenge.", interaction=interaction
+        )
+        return
+    for rel_folder in folders:
+        await challenge_local_view(bot, channel, guild, channel_name, rel_folder)
+    await check_downward_consistency(bot, channel, guild, channel_name, "")
+    logger.info(f"**WALKTHROUGH**: scanned #{channel_name} ({len(folders)} folders)", guild)
+
 def extract_title(markdown: str) -> str | None:
     for line in markdown.splitlines():
         line = line.strip()
@@ -51,7 +223,7 @@ async def handle_organize(bot, channel, guild):
     commit_msg = await bot.agent.generate_commit_message(
         f"Organized #{channel_name} channel folder via Gemini CLI"
     )
-    await asyncio.to_thread(bot.kb.save_state, commit_msg)
+    await bot.save_and_challenge(channel, guild, commit_msg)
     await bot.send_message_safe(channel, report or "No report generated.")
     logger.info(f"**ORGANIZE**: {channel_name} - {commit_msg}", guild)
 
@@ -76,7 +248,7 @@ async def handle_consolidate(bot, channel, guild):
     commit_msg = await bot.agent.generate_commit_message(
         f"Consolidated thoughts in {channel_name} into {filename}"
     )
-    await asyncio.to_thread(bot.kb.save_state, commit_msg)
+    await bot.save_and_challenge(channel, guild, commit_msg)
 
     await channel.send(f"✅ Consolidation complete. Saved to: {file_path}", file=discord.File(file_path))
     logger.info(f"**CONSOLIDATE**: {channel_name} -> `{filename}`", guild)
@@ -131,7 +303,7 @@ async def handle_research(bot, channel, guild, topic, interaction: discord.Inter
     commit_msg = await bot.agent.generate_commit_message(
         f"Research synthesis on {topic}"
     )
-    await asyncio.to_thread(bot.kb.save_state, commit_msg)
+    await bot.save_and_challenge(channel, guild, commit_msg)
 
     if interaction is not None:
         try:
@@ -181,7 +353,7 @@ async def handle_omni(bot, channel, guild, query):
     commit_msg = await bot.agent.generate_commit_message(
         f"Omni query synthesis: {query}"
     )
-    await asyncio.to_thread(bot.kb.save_state, commit_msg)
+    await bot.save_and_challenge(channel, guild, commit_msg)
     await channel.send(f"✅ Omni search complete.", file=discord.File(file_path))
     logger.info(f"**OMNI**: {query}", guild)
 
