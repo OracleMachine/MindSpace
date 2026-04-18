@@ -51,7 +51,8 @@ class GoogleGenAIBrain(LLMBrain):
     def _build_contents(history: list, message: str) -> list:
         contents = []
         for role, content in history:
-            gemini_role = "model" if role == "assistant" else "user"
+            # We now use "Bot Name (AI)" in the history cache.
+            gemini_role = "model" if "(AI)" in role else "user"
             contents.append({"role": gemini_role, "parts": [{"text": content}]})
         contents.append({"role": "user", "parts": [{"text": message}]})
         return contents
@@ -164,6 +165,18 @@ class GeminiCLIBrain(LLMBrain):
             args.extend(["-m", self.model])
         return args
 
+    def _parse_cli_output(self, text: str) -> str:
+        """Parse raw JSON-line output from the Gemini CLI and extract the assistant's content."""
+        parts = []
+        for line in text.splitlines():
+            try:
+                data = json.loads(line)
+                if data.get("role") == "assistant":
+                    parts.append(data.get("content", ""))
+            except:
+                continue
+        return "".join(parts).strip()
+
     def _build_prompt(self, instruction: str, context: str = None,
                       system_ctx: str = None, history: list = None) -> str:
         parts = []
@@ -186,14 +199,7 @@ class GeminiCLIBrain(LLMBrain):
             capture_output=True, text=True, timeout=300,
             env=self.env,
         )
-        parts = []
-        for line in result.stdout.splitlines():
-            try:
-                data = json.loads(line)
-                if data.get("role") == "assistant":
-                    parts.append(data.get("content", ""))
-            except: continue
-        return "".join(parts).strip()
+        return self._parse_cli_output(result.stdout)
 
     async def run_command_async(self, instruction: str, context: str = None) -> str:
         prompt = self._build_prompt(instruction, context)
@@ -212,14 +218,7 @@ class GeminiCLIBrain(LLMBrain):
         if proc.returncode != 0:
             logger.warning(f"GeminiCLI.run_command_async failed with code {proc.returncode}: {stderr.decode()}")
 
-        parts = []
-        for line in stdout.decode().splitlines():
-            try:
-                data = json.loads(line)
-                if data.get("role") == "assistant":
-                    parts.append(data.get("content", ""))
-            except: continue
-        return "".join(parts).strip()
+        return self._parse_cli_output(stdout.decode())
 
     async def stream(self, prompt: str, cwd: str) -> "CliStream":
         args = self.build_args()

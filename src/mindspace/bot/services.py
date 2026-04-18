@@ -82,17 +82,8 @@ async def handle_consolidate(bot, channel, guild):
     logger.info(f"**CONSOLIDATE**: {channel_name} -> `{filename}`", guild)
 
 async def handle_research(bot, channel, guild, topic, interaction: discord.Interaction = None):
-    async def status(content: str):
-        if interaction is not None:
-            try:
-                await interaction.edit_original_response(content=content)
-                return
-            except discord.HTTPException as e:
-                logger.warning(f"RESEARCH: failed to edit interaction response: {e}")
-        await channel.send(content)
-
     logger.info(f"RESEARCH: starting — topic={topic!r}")
-    await status(f"🔬 Gathering KB context for: {topic}...")
+    await bot.send_message_safe(channel, f"🔬 Gathering KB context for: {topic}...", interaction=interaction)
     channel_name = channel.name
     channel_path = bot.kb.get_channel_path(channel_name)
 
@@ -111,7 +102,7 @@ async def handle_research(bot, channel, guild, topic, interaction: discord.Inter
         combined_context=combined or "(none — the KB had no relevant matches)"
     )
 
-    await status(f"🔬 Running Gemini CLI on: {topic}\n(watch console for live progress)")
+    await bot.send_message_safe(channel, f"🔬 Running Gemini CLI on: {topic}\n(watch console for live progress)", interaction=interaction)
 
     handle = await bot.agent.stream(
         prompt=prompt,
