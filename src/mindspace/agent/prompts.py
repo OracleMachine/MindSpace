@@ -115,6 +115,47 @@ Instruction to update the view:
 TASK:
 Rewrite the entire view.md content to incorporate the new instruction while maintaining existing core principles if they still apply. Keep it concise and impactful. Output ONLY the new markdown content. Do not include formatting backticks or explanations."""
 
+DISTILL_LOCAL_VIEW_PROMPT = """You are challenging a local view.md in the MindSpace knowledge base.
+
+A view.md represents the user's *stance, opinion, conclusion, and insight* at a given scope. Supporting files in the same folder are the *facts, reasoning, and evidence* that should ground the view.
+
+SCOPE: #{channel_name}/{rel_folder}
+
+CURRENT LOCAL VIEW (may be empty if none has been established at this scope):
+---
+{current_view}
+---
+
+LOCAL SOURCE MATERIAL (evidence files in this scope):
+---
+{local_context}
+---
+
+TASK:
+Decide whether the current local view still holds in light of this evidence.
+- If the view is accurate and the evidence does not warrant change, output the literal sentinel `VIEW_OK` on a single line and nothing else.
+- Otherwise, rewrite the entire view.md content so the stance is consistent with the evidence. Keep it concise — it is an opinion, not a summary of the sources. Output ONLY the new markdown content (no backticks, no explanation, no trailer lines)."""
+
+DETECT_VIEW_CONFLICT_PROMPT = """You are checking consistency between two view.md files in the MindSpace view hierarchy. A view expresses the user's stance at its scope. A parent view should remain consistent with each child view and vice versa.
+
+PARENT SCOPE: {parent_scope}
+PARENT VIEW:
+---
+{parent_view}
+---
+
+CHILD SCOPE: {child_scope}
+CHILD VIEW:
+---
+{child_view}
+---
+
+You are being asked whether {target_label} should be updated.
+
+TASK:
+- If the two views are already consistent, output the literal sentinel `VIEW_OK` on a single line and nothing else.
+- Otherwise, rewrite the entire content of {target_label} to align with the other view, preserving its own scope and voice. Output ONLY the new markdown content (no backticks, no explanation, no trailer lines)."""
+
 PROPOSE_UPDATE_EXISTING_PROMPT = """Modify the following Knowledge Base file based on this instruction:
 INSTRUCTION: {instruction}
 

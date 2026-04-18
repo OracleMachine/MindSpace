@@ -1,4 +1,5 @@
 import os
+import re
 import datetime
 import threading
 import git
@@ -6,6 +7,21 @@ from mindspace.core import config
 from mindspace.knowledgebase.viking import VikingContextManager
 from mindspace.knowledgebase.pageindex import PageIndexManager
 from mindspace.core.logger import logger
+
+_VIEW_FRESHNESS_RE = re.compile(
+    r"\n+---\n+_Last challenged against commit `[^`]*`\._\s*$"
+)
+
+
+def strip_view_freshness(content: str) -> str:
+    """Remove the trailing freshness stamp from a view's body, if present."""
+    return _VIEW_FRESHNESS_RE.sub("", content.rstrip()).rstrip()
+
+
+def stamp_view_freshness(content: str, sha: str) -> str:
+    """Append (or replace) the freshness trailer on a view body."""
+    body = strip_view_freshness(content)
+    return f"{body}\n\n---\n_Last challenged against commit `{sha}`._\n"
 
 class KnowledgeBaseManager:
     """
@@ -57,15 +73,94 @@ class KnowledgeBaseManager:
         return path
 
     def get_view(self, channel_name: str) -> str:
-        """Read the current view.md for the channel."""
-        path = self.get_channel_path(channel_name)
-        view_file = os.path.join(path, "view.md")
+        """Read the channel-root view.md (legacy; prefer read_view / get_view_chain)."""
+        return self.read_view(channel_name, "")
+
+    def _view_path(self, channel_name: str, rel_folder: str = "") -> str:
+        """Absolute path to a view.md at the given scope within a channel."""
+        channel_path = os.path.join(self.channels_path, channel_name)
+        rel = (rel_folder or "").strip("/").strip()
+        folder = os.path.join(channel_path, rel) if rel else channel_path
+        return os.path.join(folder, "view.md")
+
+    def read_view(self, channel_name: str, rel_folder: str = "") -> str:
+        """Read a view.md at a specific scope ('' for channel root). Returns '' if missing."""
+        view_file = self._view_path(channel_name, rel_folder)
         try:
             with open(view_file, "r") as f:
                 return f.read().strip()
-        except Exception as e:
-            logger.error(f"Failed to read view.md for {channel_name}: {e}")
+        except FileNotFoundError:
             return ""
+        except Exception as e:
+            logger.error(f"Failed to read {view_file}: {e}")
+            return ""
+
+    def write_view(self, channel_name: str, rel_folder: str, content: str) -> str:
+        """Write a view.md at the given scope. Creates the folder if missing. Returns the absolute path."""
+        channel_path = self.get_channel_path(channel_name)
+        rel = (rel_folder or "").strip("/").strip()
+        folder = os.path.join(channel_path, rel) if rel else channel_path
+        os.makedirs(folder, exist_ok=True)
+        abs_path = os.path.join(folder, "view.md")
+        self.write_file(abs_path, content)
+        return abs_path
+
+    def get_view_chain(self, channel_name: str, rel_folder: str = "") -> list[tuple[str, str]]:
+        """Return [(rel_folder, content), ...] from most-local up to channel root.
+
+        Only folders that actually have a view.md are included. The channel root
+        always has a view.md (auto-created), so the list is never empty for a
+        real channel.
+        """
+        chain: list[tuple[str, str]] = []
+        rel = (rel_folder or "").strip("/").strip()
+        while True:
+            content = self.read_view(channel_name, rel)
+            if content:
+                chain.append((rel, content))
+            if not rel:
+                break
+            rel = os.path.dirname(rel)
+        return chain
+
+    def list_subfolders_with_content(self, channel_name: str) -> list[str]:
+        """Return rel_folder paths under a channel that contain at least one .md
+        file other than view.md. Used to identify folders that warrant a view."""
+        root = os.path.join(self.channels_path, channel_name)
+        if not os.path.isdir(root):
+            return []
+        out: list[str] = []
+        for dirpath, dirnames, filenames in os.walk(root):
+            dirnames[:] = sorted(d for d in dirnames if not d.startswith("."))
+            has_content = any(f.endswith(".md") and f != "view.md" for f in filenames)
+            if not has_content:
+                continue
+            rel = os.path.relpath(dirpath, root)
+            out.append("" if rel == "." else rel)
+        return out
+
+    def read_folder_context(self, channel_name: str, rel_folder: str,
+                            max_files: int = 8, max_chars_per_file: int = 2000) -> str:
+        """Concatenate the direct (non-recursive) .md source files under a folder
+        for use in a distillation prompt. Excludes view.md. Returns '' if no content."""
+        root = os.path.join(self.channels_path, channel_name)
+        rel = (rel_folder or "").strip("/").strip()
+        folder = os.path.join(root, rel) if rel else root
+        if not os.path.isdir(folder):
+            return ""
+        parts: list[str] = []
+        entries = sorted(
+            e for e in os.listdir(folder)
+            if e.endswith(".md") and e != "view.md" and not e.startswith(".")
+        )[:max_files]
+        for name in entries:
+            try:
+                with open(os.path.join(folder, name), "r") as f:
+                    body = f.read(max_chars_per_file)
+                parts.append(f"### {name}\n{body}")
+            except Exception as e:
+                logger.warning(f"read_folder_context: failed to read {name}: {e}")
+        return "\n\n".join(parts)
 
     def write_file(self, file_path, content):
         """Atomic write to the filesystem."""
@@ -118,10 +213,15 @@ class KnowledgeBaseManager:
                 except Exception as e:
                     logger.error(f"Failed to index PDF {abs_path}: {e}")
 
-    def save_state(self, message):
+    def save_state(self, message) -> dict:
         """
         Orchestrate persistence: Commit changes to Git, then lazily re-index
         the touched files in OpenViking and PageIndex.
+
+        Returns a dict with:
+          - "touched": set[(channel_name, rel_folder)] — folders under Channels/
+            that had any staged change, used to fire the view-tree challenger.
+          - "sha": str | None — HEAD commit SHA after the commit (None if no changes).
         """
         with self._git_lock:
             channels_rel = os.path.relpath(self.channels_path, self.root_path)
@@ -136,10 +236,38 @@ class KnowledgeBaseManager:
                 if p.startswith(channels_rel + os.sep) or p == channels_rel
             ]
             to_index = set(changed_files + untracked)
+            touched = self._derive_touched_folders(to_index)
 
             self.git_commit(message)
+            try:
+                sha = self._repo.head.commit.hexsha
+            except Exception:
+                sha = None
 
         self.index_files(to_index)
+        return {"touched": touched, "sha": sha}
+
+    def _derive_touched_folders(self, rel_paths) -> set[tuple[str, str]]:
+        """Map repo-relative paths under Channels/ into (channel_name, rel_folder).
+
+        rel_folder is empty string for changes directly in the channel root.
+        Paths outside Channels/ are skipped. Changes that touch only the channel
+        directory itself (no file) are skipped.
+        """
+        channels_rel = os.path.relpath(self.channels_path, self.root_path)
+        prefix = channels_rel + os.sep
+        touched: set[tuple[str, str]] = set()
+        for rel in rel_paths:
+            if not (rel == channels_rel or rel.startswith(prefix)):
+                continue
+            inside = os.path.relpath(rel, channels_rel)
+            parts = inside.split(os.sep)
+            if len(parts) < 2:
+                continue
+            channel_name = parts[0]
+            rel_folder = os.sep.join(parts[1:-1])
+            touched.add((channel_name, rel_folder))
+        return touched
 
     def get_channel_context(self, channel_name: str, query: str = "") -> str:
         """Return Viking L1 context string for a single channel."""

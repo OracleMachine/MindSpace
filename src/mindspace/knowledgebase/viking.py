@@ -44,6 +44,10 @@ class VikingContextManager:
         Surgically upsert a single file into the index (O(1) operation).
         """
         path_obj = Path(file_path)
+        # view.md files are stance/opinion, not source material — exclude to keep
+        # semantic search results grounded in evidence, not in the view itself.
+        if path_obj.name == "view.md":
+            return False
         # Skip ignored extensions from config (e.g., 'pdf' vs '.pdf')
         ext = path_obj.suffix.lower().lstrip(".")
         if ext in config.Storage.IGNORED_EXTENSIONS:
@@ -80,7 +84,7 @@ class VikingContextManager:
             # `exclude` must be a comma-separated string — openviking's _parse_patterns
             # calls .strip()/.split(",") on it directly, so passing a list crashes.
             exclude_patterns = ",".join(
-                f"*.{ext}" for ext in config.Storage.IGNORED_EXTENSIONS
+                [f"*.{ext}" for ext in config.Storage.IGNORED_EXTENSIONS] + ["view.md"]
             )
             self.client.add_resource(path=target_path, parent=parent_uri, exclude=exclude_patterns)
             self.client.wait_processed()
