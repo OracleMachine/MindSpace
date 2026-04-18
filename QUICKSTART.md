@@ -99,10 +99,12 @@ The bot supports both **Slash Commands** (`/command`) and **Prefix Commands** (`
 | `!consolidate` | Synthesizes the cumulative `stream_of_conscious.md` into a structured, permanent Markdown article. Resets the stream. | `ARTICLE-YYYY-MM-DD-subject.md` |
 | `!research [topic]` | Deep-dive on a topic by querying **OpenViking** (vector search) and **PageIndex** (document analysis). Generates a cited research paper. | `RESEARCH-YYYY-MM-DD-subject.md` |
 | `!omni [query]` | Cross-references the **entire knowledge base** (all channels) to answer broad queries with citations. | `OMNI-YYYY-MM-DD-subject.md` |
+| `!change_my_view [instruction]` | Update or view the static mindset (`view.md`) for this channel via a reviewed proposal. | `view.md` |
+| `!sync` | Manually rebuild the vector index for the current channel. | — |
 
 ### Knowledge Ingestion Workflows
 
-1. **Active Dialogue (Tool-First)**: The dialogue brain has no pre-loaded KB context. When you ask a factual question, the model calls `search_channel_knowledge_base` to retrieve relevant data from OpenViking. Insights are recorded via the `record_thought` tool call (not parsed from the reply). Progress is shown live in a Discord status message.
+1. **Active Dialogue (Tool-First)**: The dialogue brain has no pre-loaded KB context. When you ask a factual question, the model calls `search_channel_knowledge_base` to retrieve relevant data from OpenViking. Insights are silently recorded via the `record_thought` tool. If the LLM identifies that a structured edit is needed, it will autonomously call `propose_update` and pop up a **reviewed proposal UI** (with a Git diff) right in the chat. Progress is shown live in a Discord status message.
 2. **URL Ingestion**: Paste a URL (HTTP/HTTPS) and the bot will remind you to paste the content manually for ingestion.
 3. **File Indexing**: Upload a PDF or other file. The bot saves it locally and uses **PageIndex** to index its content for future `!research` or `!omni` queries.
 4. **Git Versioning**: Every major action (ingestion, organization, consolidation) triggers an automatic Git commit with an LLM-generated message.
@@ -184,16 +186,4 @@ config.yaml
 
 ## 7. Project Structure
 
-| File | Role |
-| :--- | :--- |
-| `config.yaml` | All non-secret configuration (log levels, storage path, brains, MCP servers) |
-| `Agent/bot.py` | Main Discord client, command routing, tool wrapping with progress UI |
-| `Agent/agent.py` | LLM brains — `GoogleGenAIBrain` (dialogue/AFC) + `GeminiCLIBrain` (commands) |
-| `Agent/tools.py` | Tool functions for dialogue (search KB, list files, record thought) |
-| `Agent/manager.py` | Knowledge Base filesystem + Git operations |
-| `Agent/mcp_bridge.py` | MCP integration — CLI settings sync + live session pool |
-| `Agent/viking.py` | OpenViking vector search integration |
-| `Agent/pageindex_manager.py` | PageIndex document analysis integration |
-| `Agent/config.py` | YAML loader, exposes settings as module-level constants |
-| `Agent/logger.py` | Triple-output logger (console + file + Discord) |
-| `Agent/design.md` | Full architecture specification |
+For a complete breakdown of module responsibilities and system architecture, please refer to the `docs/design.md` file.

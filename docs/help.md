@@ -3,7 +3,7 @@
 **Philosophy:** Discord is the input stream; the filesystem is the source of truth. Every channel maps to a folder in the Knowledge Base, and everything you say or drop here can become durable, searchable, version-controlled content.
 
 ## How messages are processed
-- **Plain text** → Passive dialogue. The bot replies using tool-based KB retrieval and may record insights via `record_thought`.
+- **Plain text** → Passive dialogue. The bot replies using tool-based KB retrieval, records insights silently via `record_thought`, and may proactively pop up a **reviewed proposal UI** via `propose_update` if it determines a structured file needs updating.
 - **URL** → The bot will instruct you to paste the content manually for ingestion.
 - **File drop** → Autoroute into a content-chosen subfolder, *or* a reviewed proposal when you @mention the bot on a `.md` file. See the next section for the full workflow.
 
@@ -38,7 +38,7 @@ The bot branches on a single question: **did you @mention me?** That's the expli
 - `/organize` — Scan untracked files in the current channel and semantically reorganize them. Commits the result.
 - `/consolidate` — Synthesize `stream_of_conscious.md` into a structured dated article; clears the stream.
 - `/research <topic>` — Generate a cited research report using KB context + web search. Saves and posts the file.
-- `/change_my_view <instruction>` — Update the static mindset (`view.md`) for this channel via a reviewed proposal.
+- `/change_my_view [instruction]` — Update or view the static mindset (`view.md`) for this channel via a reviewed proposal. Leave instruction blank to view the current mindset.
 - `/omni <query>` — Cross-KB synthesis across all channel folders.
 - `/sync` — Manually rebuild the vector index for the current channel (picks up external filesystem edits).
 - `/help` — Post this guide to `#notification`.

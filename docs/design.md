@@ -263,11 +263,13 @@ For structured KB maintenance (updating existing `.md` files, models, or researc
 | `!consolidate` / `/consolidate` | Synthesizes `stream_of_conscious.md` into a permanent article, clears stream, git commit | `ARTICLE-<date>-<subject>.md` |
 | `!research [topic]` / `/research` | Deep-dive on topic using Viking + PageIndex context, git commit | `RESEARCH-<date>-<subject>.md` |
 | `!omni [query]` / `/omni` | Cross-KB synthesis across **all** channel folders (global Viking traversal), git commit | `OMNI-<date>-<subject>.md` |
+| `!change_my_view [instruction]` / `/change_my_view` | Update or view the static mindset for this channel | `view.md` |
+| `!sync` / `/sync` | Manually rebuild the vector index for the current channel | — |
 | URL in message | Replies instructing user to paste content manually | — |
 | File attachment (no @mention) | Content-routed ingestion: LLM picks a subfolder within the channel and renames by content, git commit | — |
 | File attachment (@mention + `.md`) | Reviewed ingest: LLM merges draft into an existing KB file or creates a new one; surfaces via the Apply/Discard/Refine proposal UI. Any extra text is optional steering advice. | — |
 | File attachment (@mention + non-`.md`) | Content-routed ingestion, but the mention text is threaded into the routing prompt as an advice hint | — |
-| Plain text | Passive dialogue: replies via tools-first KB retrieval + records insights via `record_thought` tool call | — |
+| Plain text | Passive dialogue: replies via tools-first KB retrieval. May silently record insights via `record_thought`, or actively trigger the Apply/Discard/Refine proposal UI via the `propose_update` tool. | — |
 
 All output `.md` files are sent back to the Discord channel as Discord file attachments immediately after creation.
 

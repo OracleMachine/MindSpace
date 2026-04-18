@@ -71,15 +71,7 @@ Install: `pip install openviking pageindex`
 
 ### Discord Commands
 
-| Command | Behavior |
-|---|---|
-| `!organize` | Scans untracked files, semantically reorganizes, git commits |
-| `!consolidate` | Synthesizes `stream_of_conscious.md` into a dated article, clears stream, sends file to Discord |
-| `!research [topic]` | Generates a cited research paper using KB context, saves and sends to Discord |
-| `!omni [query]` | Cross-KB synthesis across all channel folders, saves and sends to Discord |
-| URL in message | Replies instructing user to paste content manually |
-| File attachment | Saves and analyzes file, git commits |
-| Plain text | Passive dialogue: replies via tool-based KB retrieval + records insights via `record_thought` tool |
+For a full list of commands (`!organize`, `!research`, `!change_my_view`, etc.) and detailed file ingestion workflows, refer to `docs/design.md` and `docs/help.md`.
 
 ## Configuration
 
@@ -105,66 +97,15 @@ conversation:
   history_max_chars: 8000
 ```
 
-## MCP Server Setup
+## MCP Integration
 
-MCP (Model Context Protocol) servers extend the bot with external tool capabilities (web search, database queries, document reasoning, etc.). Both brains consume configured MCP servers:
-
+MCP (Model Context Protocol) extends the bot with external tool capabilities. Both brains consume configured MCP servers automatically:
 - **Dialogue brain**: live `ClientSession`s passed to AFC alongside local tools.
 - **Command brain**: servers rendered into Gemini CLI's `settings.json` automatically.
 
-### 1. Add server(s) to `config.yaml`
+For step-by-step setup instructions, please see `QUICKSTART.md`.
 
-```yaml
-mcp:
-  servers:
-    wisburg-mcp-server:
-      url: https://mcp.wisburg.com/mcp
-      headers:
-        Authorization: Bearer ${WISBURG_MCP_TOKEN}
-
-    another-server:
-      url: https://example.com/mcp
-      headers:
-        X-Api-Key: ${ANOTHER_MCP_KEY}
-```
-
-Each server needs a `url` (streamable HTTP endpoint). `headers` is optional — used for auth tokens. `${ENV_VAR}` references are expanded from the environment at startup (secrets stay out of the checked-in YAML).
-
-### 2. Export the secret(s)
-
-```bash
-# Add to ~/.zshrc
-export WISBURG_MCP_TOKEN="your_token_here"
-export ANOTHER_MCP_KEY="your_key_here"
-```
-
-### 3. Install the MCP package
-
-```bash
-pip install mcp
-```
-
-Required for the dialogue brain's live session pool. The command brain (Gemini CLI) handles MCP natively and doesn't need this package.
-
-### 4. Start the bot
-
-```bash
-cd Agent
-python3 bot.py
-```
-
-On startup you'll see:
-- `MCP: synced N server(s) into .../bot-home/.gemini/settings.json` — command brain ready.
-- `MCP: connected -> wisburg-mcp-server (...) -- 12 tool(s)` — dialogue brain sessions live.
-- `Preflight: MCP -- wisburg-mcp-server exposes 12 tool(s)` — health check passed.
-
-### 5. Verify
-
-- **Preflight probe**: the bot connects to each configured server at startup and logs how many tools it exposes. Failures are warnings, not fatal — a transient MCP outage won't prevent the bot from starting.
-- **Dialogue**: ask a question that would benefit from an MCP tool. The Discord status message will show `🌐 MCP ``server-name``: ``tool_name``` when an MCP tool is invoked.
-- **Commands**: run `!research [topic]`. The Gemini CLI discovers MCP tools from `settings.json` and uses them in its agentic loop.
-
-### How it works
+### How MCP flows through the system
 
 ```
 config.yaml                    

@@ -1,0 +1,13 @@
+docs: deduplicate information and update command tables
+
+Problem:
+The markdown documentation contained heavily duplicated sections (such as project structure and MCP setup) which led to context bloat. Additionally, newer commands like `!change_my_view` and `!sync` were missing from the architecture and quickstart guides, and the `!change_my_view` signature was outdated.
+
+Description:
+Consolidated duplicate sections, corrected outdated command signatures, and ensured all commands are documented across the guides.
+
+Solution:
+1. `CLAUDE.md`: Removed the duplicated "Discord Commands" and step-by-step "MCP Server Setup" sections to reduce token overhead, leaving pointers to `docs/design.md` and `QUICKSTART.md`.
+2. `QUICKSTART.md`: Removed the duplicated "Project Structure" table, pointing to `docs/design.md`. Added `!change_my_view` and `!sync` to the commands table.
+3. `docs/design.md`: Added `!change_my_view` and `!sync` to the Core Workflows table.
+4. `docs/help.md`: Updated the `/change_my_view` signature to indicate that the `[instruction]` argument is optional.
