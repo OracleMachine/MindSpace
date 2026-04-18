@@ -104,45 +104,99 @@ class MindSpaceBot(discord.Client):
     async def save_and_challenge(self, channel, guild, message: str,
                                   view_scope: tuple[str, str] | None = None,
                                   cascade_mode: str = "default") -> dict:
-        """Commit and fire the view-tree challenger in the background.
+        """Commit and run the view-tree challenger sequentially afterwards.
 
-        - view_scope=None: content commit. For each folder touched in this
-          commit within `channel`'s KB folder, fire BOTH the local-view
-          challenge (is the folder's own view still accurate?) AND the
-          upward consistency check (are ancestor views still consistent
-          given the new evidence?). New information always propagates upward.
-        - view_scope=(channel_name, rel_folder): a view.md was just committed
-          at that scope. Fire the upward consistency cascade (cascade_mode
-          "default"), and additionally the downward sweep when the commit
-          represents direct user intent (cascade_mode "both") — e.g. an
-          accepted /change_my_view proposal.
+        Challenger work runs inline — not fire-and-forget. Any user command
+        that triggered a commit blocks until every dependent view check has
+        either surfaced a proposal or confirmed no drift, and only then
+        returns. This is deliberately simpler than task fan-out: LLM
+        concurrency is pinned to 1, no semaphore or queue is needed to
+        respect Gemini rate limits, and exceptions surface in logs instead
+        of being silently lost on unobserved tasks. The tradeoff is that
+        commands touching many folders block longer before the user sees
+        their "done" message — acceptable per the project's "user can wait"
+        policy.
+
+        While the cascade runs, a status message is pinned in the channel
+        and edited in place through each phase so the user always knows
+        which folder we are currently reconciling. The message is removed
+        on completion; emitted proposals are their own messages.
+
+        Routing:
+        - view_scope=None (content commit): for each folder touched in the
+          current channel's KB, run challenge_local_view then
+          check_upward_consistency in order.
+        - view_scope=(channel_name, rel_folder) (a view.md was just
+          committed): run check_upward_consistency from that scope; if
+          cascade_mode="both" (direct user intent via /change_my_view), also
+          run check_downward_consistency.
 
         Returns the save_state result dict.
         """
         result = await asyncio.to_thread(self.kb.save_state, message)
         touched = result.get("touched", set())
+
+        if view_scope is not None:
+            steps: list[tuple[str, callable]] = []
+            vchan, vrel = view_scope
+            vscope_label = vrel or "<channel-root>"
+            steps.append((
+                f"Upward-reconciling ancestors from `{vscope_label}`",
+                lambda: services.check_upward_consistency(self, channel, guild, vchan, vrel),
+            ))
+            if cascade_mode == "both":
+                steps.append((
+                    f"Downward-reconciling descendants of `{vscope_label}`",
+                    lambda: services.check_downward_consistency(self, channel, guild, vchan, vrel),
+                ))
+        else:
+            relevant = [(c, r) for (c, r) in touched if c == channel.name]
+            steps = []
+            for (chan_name, rel_folder) in relevant:
+                scope = rel_folder or "<channel-root>"
+                steps.append((
+                    f"Challenging local view at `{scope}`",
+                    # `cn, rf` default-bound to avoid the classic late-binding-in-lambda pitfall.
+                    lambda cn=chan_name, rf=rel_folder: services.challenge_local_view(self, channel, guild, cn, rf),
+                ))
+                steps.append((
+                    f"Upward-reconciling ancestors from `{scope}`",
+                    lambda cn=chan_name, rf=rel_folder: services.check_upward_consistency(self, channel, guild, cn, rf),
+                ))
+
+        if not steps:
+            return result
+
+        total = len(steps)
         try:
-            if view_scope is not None:
-                vchan, vrel = view_scope
-                asyncio.create_task(
-                    services.check_upward_consistency(self, channel, guild, vchan, vrel)
-                )
-                if cascade_mode == "both":
-                    asyncio.create_task(
-                        services.check_downward_consistency(self, channel, guild, vchan, vrel)
-                    )
-            else:
-                for (chan_name, rel_folder) in touched:
-                    if chan_name != channel.name:
-                        continue
-                    asyncio.create_task(
-                        services.challenge_local_view(self, channel, guild, chan_name, rel_folder)
-                    )
-                    asyncio.create_task(
-                        services.check_upward_consistency(self, channel, guild, chan_name, rel_folder)
-                    )
-        except Exception as e:
-            logger.warning(f"save_and_challenge: scheduling challenger failed: {e}")
+            status_msg = await channel.send(f"🧭 Reconciling view tree ({total} steps)...")
+        except discord.HTTPException as e:
+            logger.warning(f"save_and_challenge: could not post status message: {e}")
+            status_msg = None
+
+        async def _set_status(text: str) -> None:
+            if status_msg is None:
+                return
+            try:
+                await status_msg.edit(content=text)
+            except discord.HTTPException:
+                pass
+
+        for idx, (label, step) in enumerate(steps, start=1):
+            await _set_status(f"🧭 [{idx}/{total}] {label}...")
+            try:
+                await step()
+            except Exception as e:
+                # Per-step isolation: one failing folder should not skip the
+                # rest of the cascade. Log and move on; a silent hang here is
+                # worse than a warning in the log.
+                logger.warning(f"save_and_challenge: step {idx}/{total} '{label}' failed: {e}")
+
+        if status_msg is not None:
+            try:
+                await status_msg.delete()
+            except discord.HTTPException:
+                pass
         return result
 
     async def handle_attachment_ingest(self, message):

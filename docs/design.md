@@ -234,7 +234,9 @@ During passive dialogue, the `record_thought` tool appends insights to `stream_o
 
 ### 5.6 View-Tree Challenger (Event-Driven Consistency)
 
-The view hierarchy stays honest through an event-driven challenger wired into `save_state`. Every time a commit lands in `Channels/`, `save_state` returns the set of `(channel, rel_folder)` tuples that were touched; the bot's `save_and_challenge` wrapper then dispatches the appropriate consistency check as a background `asyncio` task.
+The view hierarchy stays honest through an event-driven challenger wired into `save_state`. Every time a commit lands in `Channels/`, `save_state` returns the set of `(channel, rel_folder)` tuples that were touched; the bot's `save_and_challenge` wrapper then runs the appropriate consistency checks **inline and sequentially** — not as fire-and-forget tasks. The command that triggered the commit blocks until the cascade finishes, so the "✅ done" message reflects the true completion state. This pins LLM concurrency at 1 (no semaphore or queue needed to respect Gemini rate limits) and ensures exceptions surface in the log instead of getting lost on unobserved tasks.
+
+**Progress visibility.** While the cascade runs, `save_and_challenge` posts a single `🧭 Reconciling view tree (N steps)...` message in the user's channel and edits it in place before every step (e.g. `🧭 [3/8] Upward-reconciling ancestors from \`Research/AI\`...`). The message is deleted on completion. Each step is wrapped in its own `try/except`: a failing step logs a warning and the cascade continues, so one bad folder cannot abort the rest.
 
 **Governing principle — master vs subfolder views.** Users can only *initiate* updates to the channel-root (master) view, via `/change_my_view`. Subfolder views are exclusively **LLM-initiated**: only the challenger and the consistency checks ever propose changes to them. However, every view change at any level still goes through the proposal UI (Apply / Discard / Refine) for user approval — nothing about `view.md` is ever written to disk without a deliberate click. The distinction is about *who initiates*, not about *who approves*.
 

@@ -49,5 +49,7 @@ Every folder under a channel can hold its own `view.md` — a concise stance / o
 
 Every view change, master or subfolder, still goes through the **proposal UI** (Apply / Discard / Refine) for your approval — nothing about `view.md` ever changes silently. After any KB-mutating commit the agent (a) re-challenges the touched folder's local view against its new evidence and (b) walks upward and checks every ancestor for consistency. New information always propagates upward. Each conflicting level surfaces its own proposal; the tree moves toward coherence one approval at a time.
 
+While the cascade runs you'll see a single 🧭 status message in the channel that updates in place through each step (`[3/8] Upward-reconciling ancestors from \`Research/AI\`...`), then disappears when the bot is done. Commands that touch many folders may take 20-60 seconds before reporting "done" — the status ticker is there so the wait isn't silent.
+
 ## Reserved channels
 `#system-log` and `#notification` are managed by the bot. Messages posted in them are ignored. `/help` always routes its reply here to keep your working channels clean.
