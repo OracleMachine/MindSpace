@@ -42,7 +42,7 @@ class MindSpaceAgent:
             close_fn()
 
     async def engage_dialogue(self, user_message, channel_name, history: str = "", tools: list = None, mcp_sessions: list = None):
-        history_block = f"\n\n--- Recent Conversation History ---\n(Messages labeled 'assistant' are from this bot. All other names are Discord display names of human users.)\n\n{history}" if history else ""
+        history_block = f"\n\n--- Recent Conversation History ---\n(Messages labeled '(AI)' are from you. All other names are human users.)\n\n{history}" if history else ""
         system_ctx = prompts.ENGAGE_DIALOGUE_SYSTEM_PROMPT.format(channel_name=channel_name, history_block=history_block)
         injected_ctx = self._inject_view(system_ctx, channel_name)
         response = await self.brain.achat(injected_ctx, [], user_message, tools=tools, mcp_sessions=mcp_sessions)

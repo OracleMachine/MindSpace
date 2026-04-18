@@ -110,7 +110,7 @@ class PassiveDialogueHandler:
         except: pass
 
         bot.kb.append_history(channel_name, message.author.display_name, message.content)
-        bot.kb.append_history(channel_name, "assistant", reply)
+        bot.kb.append_history(channel_name, f"{bot.user.display_name} (AI)", reply)
         await bot.send_message_safe(message.channel, reply)
 
         for pid in proposal_ids:

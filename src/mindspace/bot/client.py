@@ -466,10 +466,11 @@ class MindSpaceBot(discord.Client):
 
     async def _seed_channel_history(self, channel):
         entries = []
+        bot_name = self.user.display_name
         try:
             async for message in channel.history(limit=50, oldest_first=False):
                 if not message.content.strip(): continue
-                role = "assistant" if message.author == self.user else message.author.display_name
+                role = f"{bot_name} (AI)" if message.author == self.user else message.author.display_name
                 timestamp = message.created_at.strftime("%Y-%m-%d %H:%M")
                 entries.append(f"[{timestamp}] {role}:\n{message.content}\n\n")
         except: return
