@@ -372,17 +372,34 @@ async def handle_omni(bot, channel, guild, query):
 async def handle_change_my_view(bot, channel, guild, instruction, interaction=None):
     channel_name = channel.name
     current_view = bot.kb.get_view(channel_name)
-    
+
     if not instruction or not instruction.strip():
-        # User just wants to view the current mindset
-        msg = (
-            f"**Current Mindset (view.md) for #{channel_name}:**\n\n"
-            f"{current_view if current_view else '(empty)'}\n\n"
-            f"---\n"
-            f"💡 *To update this view, use the command again with an instruction. For example:*\n"
-            f"`/change_my_view instruction: Emphasize local-first development`"
+        # Read-only view: deliver the master view.md as a file attachment so the
+        # user gets the full document at once (no 2000-char chunk splitting) and
+        # can open it in their editor of choice.
+        view_path = os.path.join(bot.kb.get_channel_path(channel_name), "view.md")
+        hint = (
+            f"💡 *To update this view, run:* "
+            f"`/change_my_view instruction: <what to change>`"
         )
-        await bot.send_message_safe(channel, msg, interaction=interaction)
+        if not current_view or not os.path.exists(view_path):
+            msg = (
+                f"📄 **#{channel_name}/view.md is empty — no stance established yet.**\n"
+                f"{hint}"
+            )
+            await bot.send_message_safe(channel, msg, interaction=interaction)
+            return
+
+        content = f"📄 **Current master view for #{channel_name}** — see attached.\n{hint}"
+        if interaction is not None:
+            try:
+                await interaction.edit_original_response(
+                    content=content, attachments=[discord.File(view_path)]
+                )
+                return
+            except discord.HTTPException as e:
+                logger.warning(f"change_my_view: failed to attach file to interaction: {e}")
+        await channel.send(content=content, file=discord.File(view_path))
         return
 
     status_msg = None
