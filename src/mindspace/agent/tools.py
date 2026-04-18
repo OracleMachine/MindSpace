@@ -153,6 +153,32 @@ class MindSpaceTools:
                 logger.error(f"Tool Error: record_thought failed: {e}")
                 return f"Error recording thought: {str(e)}"
 
+        def get_view_chain(rel_folder: str = "") -> str:
+            """
+            Read the hierarchical view.md chain for a scope within the current channel.
+            A view.md represents the user's stance / opinion / conclusion at that scope.
+            The chain returns the most-specific view first, walking up to the channel root.
+            Use this to ground your reasoning in the user's current opinions rather than
+            just raw evidence.
+
+            Args:
+                rel_folder: Subfolder relative to the channel root (e.g., 'Research/AI').
+                           Empty string or '' for the channel-level view only.
+            """
+            logger.debug(f"Tool Execution: get_view_chain for #{channel_name} rel_folder={rel_folder!r}")
+            try:
+                chain = self.kb.get_view_chain(channel_name, rel_folder or "")
+                if not chain:
+                    return f"No view.md exists at or above `{rel_folder or '<root>'}` in #{channel_name}."
+                parts = []
+                for scope, content in chain:
+                    label = f"#{channel_name}/{scope}" if scope else f"#{channel_name} (channel root)"
+                    parts.append(f"=== View at {label} ===\n{content}")
+                return "\n\n".join(parts)
+            except Exception as e:
+                logger.error(f"Tool Error: get_view_chain failed: {e}")
+                return f"Error reading view chain: {str(e)}"
+
         async def propose_update(path: str, instruction: str, rationale: str) -> str:
             """
             Propose a targeted update to a Knowledge Base file (existing or new).
@@ -177,6 +203,7 @@ class MindSpaceTools:
             search_channel_knowledge_base,
             self.search_global_knowledge_base,
             self.list_global_files,
+            get_view_chain,
             record_thought,
             propose_update,
         ]

@@ -20,13 +20,31 @@ class MindSpaceAgent:
     def set_kb(self, kb):
         self.kb = kb
 
-    def _inject_view(self, text: str, channel_name: str) -> str:
+    def _inject_view_chain(self, text: str, channel_name: str, rel_folder: str = "") -> str:
+        """Prepend the view.md chain (most-local first → channel root) onto `text`.
+
+        When rel_folder is empty (the only case today, since Discord channels map
+        to channel roots), this reduces to injecting the root view — behaviorally
+        equivalent to the old _inject_view. Deeper scopes will naturally include
+        each ancestor view as the caller passes them in.
+        """
         if not self.kb or not channel_name:
             return text
-        view = self.kb.get_view(channel_name)
-        if not view:
+        chain = self.kb.get_view_chain(channel_name, rel_folder)
+        if not chain:
             return text
-        return f"--- Static Mindset (view.md) ---\n{view}\n\n{text}"
+        parts = []
+        for scope, content in chain:
+            header = (
+                f"--- Local View ({scope}/view.md) ---"
+                if scope else "--- Channel View (view.md) ---"
+            )
+            parts.append(f"{header}\n{content}")
+        return "\n\n".join(parts) + f"\n\n{text}"
+
+    def _inject_view(self, text: str, channel_name: str) -> str:
+        """Back-compat shim; delegates to the chain-aware injector at root scope."""
+        return self._inject_view_chain(text, channel_name, rel_folder="")
 
     async def run_command(self, instruction: str, context: str = None, channel_name: str = None) -> str:
         injected_context = self._inject_view(context or "", channel_name) if channel_name else context
