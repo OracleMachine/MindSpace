@@ -514,14 +514,41 @@ class MindSpaceBot(discord.Client):
         channel = await self._ensure_channel(guild, "system-log")
         if channel: await channel.send(message)
 
-    async def send_message_safe(self, channel, content):
+    async def send_message_safe(self, channel, content, interaction: discord.Interaction = None):
+        """Send `content` to Discord, chunked under the 2000-char per-message limit.
+
+        If `interaction` is given, the first chunk edits its deferred response and
+        any remaining chunks are sent as followups (falling back to `channel` on
+        failure). Without an interaction, all chunks go to `channel.send`.
+        """
         if not content: return
-        while len(content) > 2000:
-            split_at = content.rfind('\n', 0, 2000)
+
+        chunks = []
+        remaining = content
+        while len(remaining) > 2000:
+            split_at = remaining.rfind('\n', 0, 2000)
             if split_at == -1: split_at = 2000
-            await channel.send(content[:split_at].strip())
-            content = content[split_at:].strip()
-        if content: await channel.send(content)
+            chunks.append(remaining[:split_at].strip())
+            remaining = remaining[split_at:].strip()
+        if remaining: chunks.append(remaining)
+        if not chunks: return
+
+        first, *rest = chunks
+        if interaction is not None:
+            try:
+                await interaction.edit_original_response(content=first)
+            except discord.HTTPException as e:
+                logger.warning(f"send_message_safe: interaction edit failed, falling back to channel.send: {e}")
+                await channel.send(first)
+            for chunk in rest:
+                try:
+                    await interaction.followup.send(chunk)
+                except discord.HTTPException as e:
+                    logger.warning(f"send_message_safe: followup.send failed, falling back to channel.send: {e}")
+                    await channel.send(chunk)
+        else:
+            for chunk in chunks:
+                await channel.send(chunk)
 
     async def on_message(self, message):
         if message.author == self.user or message.channel.name in self.RESERVED_CHANNELS: return
