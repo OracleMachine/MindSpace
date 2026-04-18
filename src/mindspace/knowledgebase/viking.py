@@ -171,5 +171,3 @@ class VikingContextManager:
 
 def _sanitize(name: str) -> str:
     return name.replace(" ", "_").replace("-", "_")
-.replace(" ", "_").replace("-", "_")
-, "_")
