@@ -98,7 +98,7 @@ storage:
 brains:
   dialogue_type: GoogleGenAISdk
   command_type: gemini-cli
-  gemini_sdk_model: gemini-3-flash-preview
+  gemini_sdk_model: gemini-3.1-flash-lite-preview
   gemini_cli_model: auto-gemini-3
 
 conversation:

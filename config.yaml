@@ -15,10 +15,14 @@ brains:
   # Dialogue brain: passive chat, URL/file analysis, commit messages.
   # Options: "GoogleGenAISdk" | "litellm"
   dialogue_type: GoogleGenAISdk
+  
+  # Enable native Google Search Grounding for the dialogue brain
+  enable_google_search: true
+
   # Command brain: !organize, !consolidate, !research, !omni.
   command_type: gemini-cli
 
-  gemini_sdk_model: gemini-3-flash-preview
+  gemini_sdk_model: gemini-3.1-flash-lite-preview
   # auto-gemini-3 → CLI picker; explicit names also work; null → CLI default.
   gemini_cli_model: auto-gemini-3
 
