@@ -236,13 +236,15 @@ During passive dialogue, the `record_thought` tool appends insights to `stream_o
 
 The view hierarchy stays honest through an event-driven challenger wired into `save_state`. Every time a commit lands in `Channels/`, `save_state` returns the set of `(channel, rel_folder)` tuples that were touched; the bot's `save_and_challenge` wrapper then dispatches the appropriate consistency check as a background `asyncio` task.
 
+**Governing principle — master vs subfolder views.** Users can only *initiate* updates to the channel-root (master) view, via `/change_my_view`. Subfolder views are exclusively **LLM-initiated**: only the challenger and the consistency checks ever propose changes to them. However, every view change at any level still goes through the proposal UI (Apply / Discard / Refine) for user approval — nothing about `view.md` is ever written to disk without a deliberate click. The distinction is about *who initiates*, not about *who approves*.
+
 Three primitives live in `services.py`:
 
 | Primitive | Trigger | Effect |
 | :--- | :--- | :--- |
-| `challenge_local_view(channel, rel_folder)` | Content-file commit in `rel_folder` (ingest, organize, research, omni, accepted non-view proposal) | Distills a fresh view from the folder's evidence via `DISTILL_LOCAL_VIEW_PROMPT`. If the LLM emits the `VIEW_OK` sentinel, no-op; otherwise emits a proposal for `<rel_folder>/view.md`. Lazy-bootstraps a view when the folder has content but no existing view. |
-| `check_upward_consistency(channel, rel_folder)` | **Every content commit in `rel_folder`** (fires alongside `challenge_local_view` — new information always propagates upward), and additionally whenever a `view.md` proposal at `rel_folder` is accepted | Walks each ancestor view, runs `DETECT_VIEW_CONFLICT_PROMPT` between it and the current descendant view. Emits one proposal per conflicting ancestor — the agent rewrites the ancestor to align, the user approves each in turn. |
-| `check_downward_consistency(channel, rel_folder)` | A `/change_my_view` proposal is accepted (or the view-down-check sweep) | Same prompt inverted — walks every descendant view and emits a proposal per child that now disagrees with the (just-updated) parent. |
+| `challenge_local_view(channel, rel_folder)` | Content-file commit in `rel_folder` | Distills a fresh view from the folder's evidence via `DISTILL_LOCAL_VIEW_PROMPT`. On `VIEW_OK` sentinel, no-op. Otherwise emits a proposal for `<rel_folder>/view.md`. Lazy-bootstraps a view when the folder has content but no existing view. |
+| `check_upward_consistency(channel, rel_folder)` | **Every content commit in `rel_folder`** (fires alongside `challenge_local_view` — new information always propagates upward), and additionally whenever a `view.md` proposal at `rel_folder` is accepted | Walks each ancestor view, runs `DETECT_VIEW_CONFLICT_PROMPT` between it and the current descendant view. Emits one proposal per conflicting ancestor, subfolder or root. |
+| `check_downward_consistency(channel, rel_folder)` | A `/change_my_view` proposal is accepted (or the view-down-check sweep) | Same prompt inverted — walks every descendant view and emits a proposal per child that now disagrees with the parent. |
 
 **Direction-gating.** A view-file commit cannot re-trigger its own local challenge — that would loop on itself. `save_and_challenge(view_scope=…)` dispatches only the ancestor walk after a view commit, and the caller (`ProposalView.apply`) sets `view_scope` based on whether the accepted path ends in `view.md`.
 

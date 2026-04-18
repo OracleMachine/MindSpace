@@ -45,7 +45,9 @@ The bot branches on a single question: **did you @mention me?** That's the expli
 - `/help` — Post this guide to `#notification`.
 
 ## The view tree
-Every folder under a channel can hold its own `view.md` — a concise stance / opinion / conclusion distilled from the evidence files in that folder. The channel-root `view.md` acts as the roll-up; subfolder views express the local position. After any KB-mutating commit, the agent (a) re-challenges the touched folder's local view against its new evidence and (b) walks upward and checks every ancestor view for consistency — new information always propagates upward. Anything that drifts surfaces as a proposal you review with Apply / Discard / Refine, so the tree stays coherent one approval at a time.
+Every folder under a channel can hold its own `view.md` — a concise stance / opinion / conclusion distilled from the evidence files in that folder. The channel-root `view.md` is the **master view**: it's the only one you can *initiate* changes to (via `/change_my_view`). Subfolder views are **LLM-initiated** — only the agent's challenger and consistency checks propose updates to them.
+
+Every view change, master or subfolder, still goes through the **proposal UI** (Apply / Discard / Refine) for your approval — nothing about `view.md` ever changes silently. After any KB-mutating commit the agent (a) re-challenges the touched folder's local view against its new evidence and (b) walks upward and checks every ancestor for consistency. New information always propagates upward. Each conflicting level surfaces its own proposal; the tree moves toward coherence one approval at a time.
 
 ## Reserved channels
 `#system-log` and `#notification` are managed by the bot. Messages posted in them are ignored. `/help` always routes its reply here to keep your working channels clean.

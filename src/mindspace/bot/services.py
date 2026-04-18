@@ -43,8 +43,16 @@ async def _run_conflict_prompt(bot, parent_scope: str, parent_view: str,
 
 
 async def challenge_local_view(bot, channel, guild, channel_name: str, rel_folder: str):
-    """Re-challenge a folder's local view against its evidence files. Emit a proposal
-    on drift. Lazy-bootstraps a view if none exists yet but the folder has content."""
+    """Re-challenge a folder's local view against its evidence files. Emit a
+    proposal on drift. Lazy-bootstraps a view if none exists yet but the folder
+    has content.
+
+    Every view change — master or subfolder — is surfaced as a proposal the
+    user must Apply / Discard / Refine. The master/subfolder distinction is
+    about *who initiates* (users can only instruct changes to the master via
+    /change_my_view; subfolder changes are only initiated by the LLM via this
+    challenger and the consistency checks), not about approval.
+    """
     local_context = bot.kb.read_folder_context(channel_name, rel_folder)
     if not local_context:
         return
@@ -70,8 +78,10 @@ async def challenge_local_view(bot, channel, guild, channel_name: str, rel_folde
 
 
 async def check_upward_consistency(bot, channel, guild, channel_name: str, rel_folder: str):
-    """After a view.md update, walk upward and emit a proposal per parent whose stance
-    now conflicts with the updated descendant."""
+    """After a change somewhere in the subtree, walk upward and reconcile each
+    ancestor view with the current descendant stance. Every conflict surfaces
+    as a proposal — subfolder ancestors included — so the user approves each
+    view change explicitly."""
     child_rel = (rel_folder or "").strip("/").strip()
     child_view = bot.kb.read_view(channel_name, child_rel)
     if not child_view:

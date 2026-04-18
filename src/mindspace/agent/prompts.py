@@ -105,15 +105,27 @@ OUTPUT FORMAT (markdown):
 - <path or url>: <one-line description>
 """
 
-CHANGE_VIEW_PROMPT = """You are updating the user's static mindset view for channel #{channel_name}.
-Current view.md content:
+CHANGE_VIEW_PROMPT = """You are helping the user evolve their static mindset view for channel #{channel_name}. This is a thought-partner task, not a compliance rewrite. Your job is to make the view STRONGER — which usually means admitting where it was thin, silent, or over-confident, and letting counter-arguments actually land.
+
+CURRENT VIEW:
 {current_view}
 
-Instruction to update the view:
+USER INSTRUCTION:
 {instruction}
 
-TASK:
-Rewrite the entire view.md content to incorporate the new instruction while maintaining existing core principles if they still apply. Keep it concise and impactful. Output ONLY the new markdown content. Do not include formatting backticks or explanations."""
+REASONING (internal — do NOT include in output):
+1. Where is the current view silent on something the instruction implies matters? That silence is a blind spot. Name it plainly.
+2. If the instruction carries a counter-argument, steel-man it. If the current view cannot genuinely defeat it, the view must shift — do not hand-wave the tension.
+3. The instruction is often a symptom of a deeper gap the user hasn't yet articulated. Try to surface that gap.
+
+OUTPUT:
+Rewrite the entire view.md so the new stance:
+- Honestly absorbs the instruction and any counter-argument it carries.
+- Explicitly notes the blind spot or missed dimension that was exposed, so future reasoning starts from a more complete map.
+- Keeps prior principles only where they still survive scrutiny.
+- Stays concise and impactful — this is a stance, not a literature review.
+
+Output ONLY the new markdown content (no backticks, no commentary, no trailer lines)."""
 
 DISTILL_LOCAL_VIEW_PROMPT = """You are challenging a local view.md in the MindSpace knowledge base.
 

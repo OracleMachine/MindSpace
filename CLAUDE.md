@@ -2,6 +2,10 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+**Working-style rules (commits, bumps, commit-message format) live in `AGENTS.md`** — shared across every agent CLI. Read it alongside this file.
+
+@AGENTS.md
+
 ## Running the Bot
 
 ```bash
@@ -54,7 +58,7 @@ Thought/
 
 - **Tool-first architecture**: all structured bot behaviors (KB retrieval, thought recording, side-effects) are expressed as typed tool calls, not in-band prompt conventions. See `Agent/design.md` section 5.0 for rationale.
 - **Tools-first dialogue**: the dialogue brain receives NO pre-loaded KB context (beyond the view chain). The model must call `search_channel_knowledge_base` to retrieve data. This keeps prompts lean and ensures tool progress UI is exercised.
-- **View hierarchy**: every folder under a channel may hold its own `view.md` (stance/opinion/conclusion at that scope). The channel-root view rolls up the subtree. An event-driven challenger wired into `save_state` re-distills the touched folder's view after each content commit AND walks upward to check every ancestor — new information always propagates up. `/change_my_view` additionally fires the downward cascade. See `docs/design.md` §5.6.
+- **View hierarchy**: every folder under a channel may hold its own `view.md` (stance/opinion/conclusion at that scope). The channel-root view rolls up the subtree. Governing rule: **users can only initiate master-view updates** (via `/change_my_view`); subfolder view updates are LLM-initiated only (via the challenger / consistency checks). But every view change — master or subfolder — still requires user approval through the proposal UI. An event-driven challenger wired into `save_state` re-distills the touched folder's view after each content commit AND walks upward to check every ancestor — new information always propagates up. `/change_my_view` additionally fires the downward cascade. See `docs/design.md` §5.6.
 
 ### LLM Brain Selection
 
