@@ -41,11 +41,11 @@ Thought/
 ### Module Responsibilities
 
 - **`bot.py`** — `MindSpaceBot(discord.Client)`: The entry point. Handles `on_message` and routes to commands (delegated to `services.py`), file ingestion, or passive dialogue. Wraps tools with async progress decorators for Discord status updates.
-- **`services.py`** — Contains the core business logic for all active commands (`!organize`, `!consolidate`, `!research`, `!omni`, `!change_my_view`).
+- **`services.py`** — Core business logic for active commands (`!organize`, `!consolidate`, `!research`, `!omni`, `!change_my_view`) and the view-tree challenger (`challenge_local_view`, `check_upward_consistency`, `check_downward_consistency`, `handle_walkthrough_views`).
 - **`prompts.py`** — Centralized repository for all LLM prompt templates used by the agent and services.
 - **`agent.py`** — `MindSpaceAgent`: Dual-brain LLM abstraction. `GoogleGenAIBrain` for dialogue (async chat via `achat`, URL/file analysis, commit messages). `GeminiCLIBrain` for commands — owns the `gemini -y` subprocess, env (`GEMINI_CLI_HOME`) and args injection, and exposes `stream(prompt, cwd)` -> `CliStream` async-iterable handle.
-- **`tools.py`** — `MindSpaceTools`: closure-bound tool functions exposed to the LLM during passive dialogue (`list_channel_files`, `search_channel_knowledge_base`, `search_global_knowledge_base`, `list_global_files`, `record_thought`).
-- **`manager.py`** — `KnowledgeBaseManager`: All filesystem and Git operations. Creates per-server repos, manages channel folders, appends thoughts, and performs `git commit` after every active command.
+- **`tools.py`** — `MindSpaceTools`: closure-bound tool functions exposed to the LLM during passive dialogue (`list_channel_files`, `search_channel_knowledge_base`, `search_global_knowledge_base`, `list_global_files`, `get_view_chain`, `record_thought`, `propose_update`). `propose_update` refuses any path whose basename is `view.md` at any depth — view edits only flow through the challenger / `/change_my_view`.
+- **`manager.py`** — `KnowledgeBaseManager`: All filesystem and Git operations. Creates per-server repos, manages channel folders, appends thoughts, and performs `git commit` after every active command. `save_state` returns `{touched, sha}` so the bot can drive the view-tree challenger. Hierarchical view helpers: `read_view`, `write_view`, `get_view_chain`, `list_subfolders_with_content`, `read_folder_context`.
 - **`mcp_bridge.py`** — MCP integration. `sync_cli_settings()` renders MCP servers into Gemini CLI's settings.json. `MCPSessionPool` manages live `ClientSession`s for the dialogue brain via AFC.
 - **`config.py`** — Thin YAML loader (`config.yaml` at repo root). Exposes all settings as module-level constants. Secrets stay in env vars.
 - **`logger.py`** — `MindSpaceLogger`: Triple-output logger (console + file + Discord `#system-log` channel), each with independent configurable levels.
@@ -53,7 +53,8 @@ Thought/
 ### Design Principles
 
 - **Tool-first architecture**: all structured bot behaviors (KB retrieval, thought recording, side-effects) are expressed as typed tool calls, not in-band prompt conventions. See `Agent/design.md` section 5.0 for rationale.
-- **Tools-first dialogue**: the dialogue brain receives NO pre-loaded KB context. The model must call `search_channel_knowledge_base` to retrieve data. This keeps prompts lean and ensures tool progress UI is exercised.
+- **Tools-first dialogue**: the dialogue brain receives NO pre-loaded KB context (beyond the view chain). The model must call `search_channel_knowledge_base` to retrieve data. This keeps prompts lean and ensures tool progress UI is exercised.
+- **View hierarchy**: every folder under a channel may hold its own `view.md` (stance/opinion/conclusion at that scope). The channel-root view rolls up the subtree. An event-driven challenger wired into `save_state` re-distills the touched folder's view after each commit and walks upward after a view update to emit conflict proposals for any inconsistent ancestor. `/change_my_view` additionally fires the downward cascade. See `docs/design.md` §5.6.
 
 ### LLM Brain Selection
 

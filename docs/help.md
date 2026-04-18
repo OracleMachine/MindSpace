@@ -38,10 +38,14 @@ The bot branches on a single question: **did you @mention me?** That's the expli
 - `/organize` — Scan untracked files in the current channel and semantically reorganize them. Commits the result.
 - `/consolidate` — Synthesize `stream_of_conscious.md` into a structured dated article; clears the stream.
 - `/research <topic>` — Generate a cited research report using KB context + web search. Saves and posts the file.
-- `/change_my_view [instruction]` — Update or view the static mindset (`view.md`) for this channel via a reviewed proposal. Leave instruction blank to view the current mindset.
+- `/change_my_view [instruction]` — Update or view the channel's root stance (`view.md`) via a reviewed proposal. Accepting a change also runs a consistency sweep across every subfolder view, emitting proposals for any child that drifts. Leave instruction blank to view the current mindset.
+- `/walkthrough_views` — Re-challenge every subfolder view in the current channel against its evidence, plus a consistency sweep from the channel root. Run irregularly to catch drift the per-commit hook missed.
 - `/omni <query>` — Cross-KB synthesis across all channel folders.
 - `/sync` — Manually rebuild the vector index for the current channel (picks up external filesystem edits).
 - `/help` — Post this guide to `#notification`.
+
+## The view tree
+Every folder under a channel can hold its own `view.md` — a concise stance / opinion / conclusion distilled from the evidence files in that folder. The channel-root `view.md` acts as the roll-up; subfolder views express the local position. After any KB-mutating commit, the agent re-challenges the touched folder's local view against its new evidence and, if drift is detected, surfaces a proposal. Accepting a view update then walks upward and emits a proposal for any ancestor whose stance is now inconsistent — so the tree stays coherent one approval at a time.
 
 ## Reserved channels
 `#system-log` and `#notification` are managed by the bot. Messages posted in them are ignored. `/help` always routes its reply here to keep your working channels clean.

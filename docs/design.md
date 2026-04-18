@@ -41,6 +41,11 @@ The system uses **VikingContextManager** (wrapping OpenViking) for context navig
 #### AI-Controlled Autonomous Zone (Fluid)
 - Inside each channel folder, the agent has freedom to create semantically nested sub-folders (e.g., `Machine_Learning/Neural_Networks/Transformers/`).
 
+#### View Hierarchy (Progressive Disclosure)
+- Any folder under a channel may hold its own `view.md` — a distilled **stance / opinion / conclusion** for that scope. Evidence files in the same folder are the *facts, logic, and theory* that support or challenge it.
+- The channel-root `view.md` is the roll-up over its subtree; each subfolder view expresses the user's local position. Same filename at every level — hierarchy, not nomenclature, carries the meaning.
+- Views are **opinions, not sources** — so they are excluded from the OpenViking index to keep semantic retrieval grounded in evidence. The chain is read directly from disk via `get_view_chain(channel, rel_folder)`.
+
 ---
 
 ## 4. Message Handling Flow (Chain of Responsibility)
@@ -76,11 +81,11 @@ graph TD
 | Module | Responsibility |
 | :--- | :--- |
 | `bot.py` | Discord event loop (`on_message`), command routing (prefix `!` and slash `/`), startup sync. Single `KnowledgeBaseManager` instance (`self.kb`) initialized in `on_ready`. `on_guild_join` enforces the single-server constraint by leaving immediately if `self.kb` is already set. |
-| `services.py` | Contains the core business logic for all active commands (`!organize`, `!consolidate`, `!research`, `!omni`, `!change_my_view`). |
+| `services.py` | Core business logic for all active commands (`!organize`, `!consolidate`, `!research`, `!omni`, `!change_my_view`) plus the view-tree challenger (`challenge_local_view`, `check_upward_consistency`, `check_downward_consistency`, `handle_walkthrough_views`). |
 | `prompts.py` | Centralized repository for all LLM prompt templates used by the agent and services. |
 | `agent.py` | LLM abstraction. `GoogleGenAIBrain` for dialogue (chat, URL/file analysis, commit messages). `GeminiCLIBrain` for commands — exposes `stream(prompt, cwd)` returning a `CliStream` async-iterable handle; env (`GEMINI_CLI_HOME`) and args (`-y`, `-m`) are always injected. |
-| `manager.py` | Filesystem writes, Git commits, orchestrated `save_state` (commit + indexing), per-channel conversation history, stream reads |
-| `tools.py` | `MindSpaceTools`: closure-bound tool functions exposed to the LLM during passive dialogue (list files, search channel KB, search global KB, record thought) |
+| `manager.py` | Filesystem writes, Git commits, orchestrated `save_state` (commit + indexing; returns `{touched, sha}` so callers can drive the view-tree challenger), per-channel conversation history, stream reads, and the hierarchical view helpers (`read_view`, `write_view`, `get_view_chain`, `list_subfolders_with_content`, `read_folder_context`). |
+| `tools.py` | `MindSpaceTools`: closure-bound tool functions exposed to the LLM during passive dialogue (list files, search channel KB, search global KB, read hierarchical view chain, record thought, propose update). |
 | `viking.py` | `VikingContextManager`: OpenViking wrapper; channel-scoped and global semantic search modes |
 | `pageindex_manager.py` | `PageIndexManager`: PageIndex cloud API wrapper; PDF upload, async processing, channel-scoped deep Q&A |
 | `mcp_bridge.py` | MCP (Model Context Protocol) integration. Handles two-pronged sync: rendering `config.yaml` servers into Gemini CLI's `settings.json` for active commands, and managing an `MCPSessionPool` for native SDK tool use in passive dialogue. |
@@ -140,7 +145,9 @@ On every passive dialogue message, the agent receives a **minimal** system conte
   - search_global_knowledge_base(query)   — Viking semantic search, all channels
   - list_channel_files()                  — directory tree of the channel folder
   - list_global_files()                   — directory tree of all channels
-  - record_thought(summary)              — persist an insight to stream_of_conscious.md
+  - get_view_chain(rel_folder)            — read the hierarchical view.md chain from a scope up to channel root
+  - record_thought(summary)               — persist an insight to stream_of_conscious.md
+  - propose_update(path, instruction, …)  — stage a reviewed edit to a KB file (view.md excluded — managed by the challenger)
 
 [Current Message]
   - User's latest message
@@ -225,7 +232,27 @@ The `KnowledgeBaseManager` decouples the source-of-truth (Git) from derived sema
 **Lazy Thought Indexing:**
 During passive dialogue, the `record_thought` tool appends insights to `stream_of_conscious.md` on disk. To avoid excessive Git noise and I/O overhead, these updates do **not** trigger an immediate commit or re-index. Instead, they are lazily picked up and indexed during the next naturally occurring `save_state` (e.g., when the user eventually drops a file or runs an active command).
 
-### 5.6 KB Maintenance: The "Instruction-Based Delegate" Pattern
+### 5.6 View-Tree Challenger (Event-Driven Consistency)
+
+The view hierarchy stays honest through an event-driven challenger wired into `save_state`. Every time a commit lands in `Channels/`, `save_state` returns the set of `(channel, rel_folder)` tuples that were touched; the bot's `save_and_challenge` wrapper then dispatches the appropriate consistency check as a background `asyncio` task.
+
+Three primitives live in `services.py`:
+
+| Primitive | Trigger | Effect |
+| :--- | :--- | :--- |
+| `challenge_local_view(channel, rel_folder)` | Content-file commit in `rel_folder` (ingest, organize, research, omni, accepted non-view proposal) | Distills a fresh view from the folder's evidence via `DISTILL_LOCAL_VIEW_PROMPT`. If the LLM emits the `VIEW_OK` sentinel, no-op; otherwise emits a proposal for `<rel_folder>/view.md`. Lazy-bootstraps a view when the folder has content but no existing view. |
+| `check_upward_consistency(channel, rel_folder)` | A `view.md` proposal at `rel_folder` is accepted | Walks each ancestor view, runs `DETECT_VIEW_CONFLICT_PROMPT` between it and the newly-updated descendant. Emits one proposal per conflicting ancestor — the agent rewrites the ancestor to align, the user approves each in turn. |
+| `check_downward_consistency(channel, rel_folder)` | A `/change_my_view` proposal is accepted (or the walkthrough sweep) | Same prompt inverted — walks every descendant view and emits a proposal per child that now disagrees with the (just-updated) parent. |
+
+**Direction-gating.** A view-file commit cannot re-trigger its own local challenge — that would loop on itself. `save_and_challenge(view_scope=…)` dispatches only the ancestor walk after a view commit, and the caller (`ProposalView.apply`) sets `view_scope` based on whether the accepted path ends in `view.md`.
+
+**Cascade tagging.** Most view-proposal acceptances should propagate only upward (the challenger already emitted the local update deliberately — children weren't surprised). `/change_my_view` is the exception: it represents direct user intent at the root, so its proposal is tagged `cascade="both"` and its acceptance fires both upward and downward sweeps.
+
+**No periodic loop.** There is no background scheduler. Drift that slips through the event-driven path (e.g., multi-folder commits, long-quiet channels) is reconciled by the manual `/walkthrough_views` command, which local-challenges every content folder in the channel and then runs a downward consistency pass from the root.
+
+**Proposal protection.** `handle_propose_update` (the dialogue tool's entry point) refuses any path whose basename is `view.md`, at every depth. View edits only enter the filesystem through the challenger, the conflict detector, or `/change_my_view` — never through ambient dialogue.
+
+### 5.7 KB Maintenance: The "Instruction-Based Delegate" Pattern
 
 For structured KB maintenance (updating existing `.md` files, models, or research articles), the agent uses the `propose_update` tool. This follows a specialized **Stateless Rewrite Agent** architecture to ensure safety and prevent **Context Window Bloat**.
 
@@ -263,7 +290,8 @@ For structured KB maintenance (updating existing `.md` files, models, or researc
 | `!consolidate` / `/consolidate` | Synthesizes `stream_of_conscious.md` into a permanent article, clears stream, git commit | `ARTICLE-<date>-<subject>.md` |
 | `!research [topic]` / `/research` | Deep-dive on topic using Viking + PageIndex context, git commit | `RESEARCH-<date>-<subject>.md` |
 | `!omni [query]` / `/omni` | Cross-KB synthesis across **all** channel folders (global Viking traversal), git commit | `OMNI-<date>-<subject>.md` |
-| `!change_my_view [instruction]` / `/change_my_view` | Update or view the static mindset for this channel | `view.md` |
+| `!change_my_view [instruction]` / `/change_my_view` | Update the channel-root view via a reviewed proposal. Accepting also fires a downward consistency sweep that emits proposals for every subfolder view that drifts. | `view.md` |
+| `!walkthrough_views` / `/walkthrough_views` | Re-challenge every content folder's local view, then a downward consistency sweep from the channel root. | — |
 | `!sync` / `/sync` | Manually rebuild the vector index for the current channel | — |
 | URL in message | Replies instructing user to paste content manually | — |
 | File attachment (no @mention) | Content-routed ingestion: LLM picks a subfolder within the channel and renames by content, git commit | — |
