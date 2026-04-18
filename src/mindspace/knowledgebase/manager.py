@@ -25,7 +25,7 @@ class KnowledgeBaseManager:
         logger.info("KB: initializing PageIndexManager (cloud client)...")
         self.pageindex = PageIndexManager()
         self._history_cache = {}  # channel_name → bounded history string
-        self._git_lock = threading.Lock()
+        self._git_lock = threading.RLock()
         logger.info("KB: initialization complete")
 
     def _sanitize_name(self, name):
@@ -138,12 +138,7 @@ class KnowledgeBaseManager:
             ]
             to_index = set(changed_files + untracked)
 
-            # Stage ONLY Channels/
-            self._repo.git.add(channels_rel)
-            try:
-                self._repo.index.commit(message)
-            except Exception as e:
-                logger.warning(f"Git commit failed (likely no changes): {e}")
+            self.git_commit(message)
 
         self.index_files(to_index)
 
