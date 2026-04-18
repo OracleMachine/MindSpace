@@ -79,17 +79,22 @@ class ProposalView(discord.ui.View):
             f"KB update: {proposal['rel_path']} — {proposal['rationale']}"
         )
 
-        # Direction-gate the post-commit challenger: a view.md acceptance only
-        # fires the upward consistency cascade; anything else fires the
-        # per-folder local challenge.
+        # Direction-gate the post-commit challenger. A view.md acceptance fires
+        # the upward consistency cascade; if the proposal was tagged
+        # cascade="both" (direct user intent via /change_my_view), also fire
+        # the downward sweep. Non-view commits fall back to per-folder local
+        # challenge.
         is_view_commit = os.path.basename(proposal["rel_path"]).lower() == "view.md"
         if is_view_commit:
             rel_folder = os.path.dirname(proposal["rel_path"])
             view_scope = (proposal["channel_name"], rel_folder)
+            cascade_mode = proposal.get("cascade", "default")
         else:
             view_scope = None
+            cascade_mode = "default"
         await self.bot.save_and_challenge(
-            interaction.channel, interaction.guild, commit_msg, view_scope=view_scope
+            interaction.channel, interaction.guild, commit_msg,
+            view_scope=view_scope, cascade_mode=cascade_mode,
         )
 
         await interaction.edit_original_response(

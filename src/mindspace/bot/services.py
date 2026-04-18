@@ -401,7 +401,8 @@ async def handle_change_my_view(bot, channel, guild, instruction, interaction=No
         existing_content=current_view,
         proposed_content=new_view,
         instruction=instruction,
-        rationale="User requested a mindset view change."
+        rationale="User requested a mindset view change.",
+        cascade="both",
     )
 
     if status_msg:

@@ -102,13 +102,17 @@ class MindSpaceBot(discord.Client):
         return commit_msg
 
     async def save_and_challenge(self, channel, guild, message: str,
-                                  view_scope: tuple[str, str] | None = None) -> dict:
+                                  view_scope: tuple[str, str] | None = None,
+                                  cascade_mode: str = "default") -> dict:
         """Commit and fire the view-tree challenger in the background.
 
-        - view_scope=None (default): content commit. For each folder touched in
-          this commit within `channel`'s KB folder, fire a local-view challenge.
-        - view_scope=(channel_name, rel_folder): a view.md was just committed at
-          that scope — fire the upward consistency cascade instead.
+        - view_scope=None: content commit. For each folder touched in this
+          commit within `channel`'s KB folder, fire a local-view challenge.
+        - view_scope=(channel_name, rel_folder): a view.md was just committed
+          at that scope. Fire the upward consistency cascade (cascade_mode
+          "default"), and additionally the downward sweep when the commit
+          represents direct user intent (cascade_mode "both") — e.g. an
+          accepted /change_my_view proposal.
 
         Returns the save_state result dict.
         """
@@ -120,6 +124,10 @@ class MindSpaceBot(discord.Client):
                 asyncio.create_task(
                     services.check_upward_consistency(self, channel, guild, vchan, vrel)
                 )
+                if cascade_mode == "both":
+                    asyncio.create_task(
+                        services.check_downward_consistency(self, channel, guild, vchan, vrel)
+                    )
             else:
                 for (chan_name, rel_folder) in touched:
                     if chan_name != channel.name:
@@ -183,6 +191,11 @@ class MindSpaceBot(discord.Client):
         async def cmd_omni(interaction: discord.Interaction, query: str):
             await interaction.response.defer(thinking=True)
             await services.handle_omni(self, interaction.channel, interaction.guild, query)
+
+        @self.tree.command(name="walkthrough_views", description="Walk the view tree for this channel: challenge each subfolder's view and check parent/child consistency.")
+        async def cmd_walkthrough_views(interaction: discord.Interaction):
+            await interaction.response.defer(thinking=True)
+            await services.handle_walkthrough_views(self, interaction.channel, interaction.guild, interaction=interaction)
 
         @self.tree.command(name="help", description="Post the MindSpace usage guide to #notification.")
         async def cmd_help(interaction: discord.Interaction):
@@ -279,7 +292,16 @@ class MindSpaceBot(discord.Client):
 
     def _create_proposal(self, channel_name: str, rel_path: str,
                           existing_content: str, proposed_content: str,
-                          instruction: str, rationale: str) -> str:
+                          instruction: str, rationale: str,
+                          cascade: str = "default") -> str:
+        """Create a pending proposal.
+
+        cascade selects the post-accept consistency sweep for view.md proposals:
+          - "default": upward only (used by challenger/conflict-detector proposals)
+          - "both": upward + downward (used by /change_my_view, since that is
+                    direct user intent that should propagate to descendants)
+        Ignored for non-view proposals.
+        """
         proposal_id = uuid.uuid4().hex[:8]
         self._pending_proposals[proposal_id] = {
             "channel_name": channel_name,
@@ -288,6 +310,7 @@ class MindSpaceBot(discord.Client):
             "proposed_content": proposed_content,
             "rationale": rationale,
             "instruction": instruction,
+            "cascade": cascade,
         }
         return proposal_id
 

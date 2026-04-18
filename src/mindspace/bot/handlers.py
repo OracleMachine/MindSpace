@@ -51,6 +51,12 @@ class ActiveCommandHandler:
         if cmd == "change_my_view":
             await services.handle_change_my_view(bot, message.channel, message.guild, args)
             return True
+        if cmd == "walkthrough_views":
+            if args:
+                await message.channel.send("Usage: `!walkthrough_views` (takes no arguments)")
+            else:
+                await services.handle_walkthrough_views(bot, message.channel, message.guild)
+            return True
 
         return False
 
