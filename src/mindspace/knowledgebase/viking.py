@@ -4,6 +4,46 @@ import openviking as ov  # hard import — fails fast if package not installed
 from mindspace.core import config
 from mindspace.core.logger import logger
 
+# Single source of truth for where channel content lives inside OpenViking.
+# Previously we had two conflicting conventions: full-tree sync wrote under
+# `viking://resources/Channels/...`, while per-file runtime indexing wrote to
+# `viking://resources/<channel_name>/...`. That created 2× (and worse, N×
+# with rebuild auto-renames) duplicates of every file in the vector DB.
+# Everything now resolves through this prefix.
+_CHANNELS_ROOT_URI = "viking://resources/Channels"
+
+
+def _channel_dir_uri(channel_name: str) -> str:
+    """Canonical URI for a channel's folder inside OpenViking (trailing slash
+    — openviking treats that as 'this is a directory URI, place children under it')."""
+    return f"{_CHANNELS_ROOT_URI}/{channel_name}/"
+
+
+def _format_token_summary(telemetry: dict | None) -> str:
+    """Render the telemetry dict returned by `add_resource(telemetry=True)` as
+    a single human-readable line — so every sync produces a receipt that
+    disambiguates "zero tokens, pure CPU hash-walk" from "hit Gemini for N
+    embeddings." Returns '' when the dict is missing or malformed."""
+    if not telemetry:
+        return ""
+    summary = telemetry.get("summary", {}) or {}
+    tokens = summary.get("tokens", {}) or {}
+    total = tokens.get("total", 0) or 0
+    embedding_total = (tokens.get("embedding") or {}).get("total", 0) or 0
+    llm = tokens.get("llm") or {}
+    llm_total = llm.get("total", 0) or 0
+    duration_ms = summary.get("duration_ms", 0) or 0
+    if total <= 0:
+        return (
+            f"✅ OpenViking: sync complete in {duration_ms:.0f}ms — "
+            f"no tokens spent (CPU-only: hashes matched, embeddings cached)"
+        )
+    return (
+        f"✅ OpenViking: sync complete in {duration_ms:.0f}ms — "
+        f"{total:,} tokens used ({embedding_total:,} embedding + "
+        f"{llm_total:,} LLM; input/output {llm.get('input', 0):,}/{llm.get('output', 0):,})"
+    )
+
 
 class VikingContextManager:
     """
@@ -27,15 +67,20 @@ class VikingContextManager:
 
     def _ensure_channel_dir(self, channel_name: str) -> str:
         """
-        Ensure viking://resources/<channel_name>/ exists in the OpenViking store.
+        Ensure the canonical channel URI (viking://resources/Channels/<name>/)
+        exists in the OpenViking store. Idempotent — uses a local set cache.
         """
-        channel_uri = f"viking://resources/{channel_name}/"
+        channel_uri = _channel_dir_uri(channel_name)
         if channel_uri in self._ensured_channels:
             return channel_uri
-        try:
-            self.client.mkdir(channel_uri)
-        except Exception:
-            pass  # fine if exists
+        # The Channels/ parent must exist before creating a child under it.
+        # mkdir is a no-op if already present; wrapped in try/except because
+        # OpenViking raises on "already exists" rather than returning a flag.
+        for uri in (_CHANNELS_ROOT_URI + "/", channel_uri):
+            try:
+                self.client.mkdir(uri)
+            except Exception:
+                pass
         self._ensured_channels.add(channel_uri)
         return channel_uri
 
@@ -68,15 +113,21 @@ class VikingContextManager:
         """
         Sync disk state with OpenViking. Uses native directory mirroring.
         If channel_name is provided, only that channel folder is synced.
+
+        Uses `to=<exact target URI>` rather than `parent=<root>`. OpenViking's
+        tree_builder calls `_resolve_unique_uri` on the `parent=` path when the
+        candidate URI already exists, producing `Channels`, `Channels_1`, ...
+        siblings on each restart. `to=` skips that resolver and writes into the
+        exact URI, overwriting in place.
         """
         if channel_name:
             target_path = os.path.join(self.root_path, channel_name)
-            parent_uri = f"viking://resources/{channel_name}/"
+            target_uri = f"{_CHANNELS_ROOT_URI}/{channel_name}"
             logger.info(f"⚙️ OpenViking: Syncing channel #{channel_name}...")
         else:
             target_path = self.root_path
-            parent_uri = "viking://resources/"
-            logger.info("⚙️ OpenViking: Syncing entire Knowledge Base...")
+            target_uri = _CHANNELS_ROOT_URI
+            logger.info(f"⚙️ OpenViking: Syncing all channels ({target_path})...")
 
         try:
             # OpenViking walks the dir and uses local CPU hashes to skip unchanged files (0 tokens).
@@ -86,9 +137,21 @@ class VikingContextManager:
             exclude_patterns = ",".join(
                 [f"*.{ext}" for ext in config.Storage.IGNORED_EXTENSIONS] + ["view.md"]
             )
-            self.client.add_resource(path=target_path, parent=parent_uri, exclude=exclude_patterns)
-            self.client.wait_processed()
-            logger.info(f"✅ OpenViking: Sync complete for {target_path}")
+            # wait=True replaces the separate wait_processed() call and lets
+            # add_resource attach telemetry to its return value. telemetry=True
+            # surfaces token counts + duration so we can tell, per run, whether
+            # the sync was pure-CPU (zero tokens) or hit the Gemini embedding API.
+            result = self.client.add_resource(
+                path=target_path, to=target_uri, exclude=exclude_patterns,
+                wait=True, telemetry=True,
+            )
+            summary_line = _format_token_summary((result or {}).get("telemetry"))
+            if summary_line:
+                logger.info(summary_line)
+            else:
+                # Telemetry dict absent (unexpected — different OpenViking build?);
+                # fall back to the old terse line rather than silently succeed.
+                logger.info(f"✅ OpenViking: Sync complete for {target_path}")
         except Exception as e:
             logger.error(f"❌ OpenViking: Sync failed: {e}")
 
@@ -149,7 +212,7 @@ class VikingContextManager:
         """
         Return context string scoped to a single channel.
         """
-        channel_uri = f"viking://resources/{channel_name}/"
+        channel_uri = _channel_dir_uri(channel_name)
         if query:
             logger.info(f"🔎 OpenViking: Searching channel #{channel_name} for '{query}'...")
             return self._safe_search(query, channel_uri, limit=3, channel_name=channel_name)
@@ -162,8 +225,10 @@ class VikingContextManager:
         Traverse ALL channel folders.
         """
         logger.info(f"🌐 OpenViking: Global search for '{query}'...")
-        # Scope global search to resources to avoid internal system leaks
-        return self._safe_search(query, "viking://resources/", limit=10)
+        # Scope global search to the Channels subtree (ignoring any residual
+        # top-level metadata under viking://resources/ like .overview.md that
+        # OpenViking maintains for the root itself).
+        return self._safe_search(query, _CHANNELS_ROOT_URI + "/", limit=10)
 
     def close(self):
         self.client.close()
