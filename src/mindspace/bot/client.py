@@ -411,7 +411,7 @@ class MindSpaceBot(discord.Client):
         )
 
     def _proposal_fallback_path(self, draft_content: str, attachment_name: str) -> str:
-        subject = services._slugify_subject(services._extract_title(draft_content) or attachment_name.rsplit(".", 1)[0])
+        subject = services.slugify_subject(services.extract_title(draft_content) or attachment_name.rsplit(".", 1)[0])
         return f"NOTE-{datetime.date.today()}-{subject}.md"
 
     def _resolve_proposal_target(self, channel_path: str, plan: dict,

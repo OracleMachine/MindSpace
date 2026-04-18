@@ -1,7 +1,6 @@
 import os
 import datetime
 import threading
-from pathlib import Path
 import git
 from mindspace.core import config
 from mindspace.knowledgebase.viking import VikingContextManager

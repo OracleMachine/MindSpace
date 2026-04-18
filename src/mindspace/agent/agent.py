@@ -33,7 +33,6 @@ class MindSpaceAgent:
         return await self.cli_brain.run_command_async(instruction, injected_context)
 
     async def stream(self, prompt: str, cwd: str, channel_name: str = None):
-        from mindspace.agent.brain import CliStream
         injected_prompt = self._inject_view(prompt, channel_name) if channel_name else prompt
         return await self.cli_brain.stream(injected_prompt, cwd)
 

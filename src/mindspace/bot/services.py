@@ -1,4 +1,5 @@
 import os
+import re
 import datetime
 import asyncio
 import discord
@@ -6,15 +7,14 @@ from mindspace.core import config
 from mindspace.core.logger import logger
 from mindspace.agent import prompts
 
-def _extract_title(markdown: str) -> str | None:
+def extract_title(markdown: str) -> str | None:
     for line in markdown.splitlines():
         line = line.strip()
         if line.startswith("# "):
             return line[2:].strip()
     return None
 
-def _slugify_subject(text: str, max_len: int = 50) -> str:
-    import re
+def slugify_subject(text: str, max_len: int = 50) -> str:
     s = re.sub(r"[^\w\s-]", "", text.lower())
     s = re.sub(r"[\s_]+", "-", s).strip("-")
     return s[:max_len].rstrip("-") or "untitled"
@@ -67,7 +67,7 @@ async def handle_consolidate(bot, channel, guild):
     prompt = prompts.CONSOLIDATE_PROMPT.format(content=content)
     synthesis = await bot.agent.run_command(prompt, channel_name=channel_name)
     
-    subject = _slugify_subject(_extract_title(synthesis) or channel_name)
+    subject = slugify_subject(extract_title(synthesis) or channel_name)
     filename = f"ARTICLE-{datetime.date.today()}-{subject}.md"
     file_path = os.path.join(channel_path, filename)
     bot.kb.write_file(file_path, synthesis)
@@ -131,7 +131,7 @@ async def handle_research(bot, channel, guild, topic, interaction: discord.Inter
         await status("⚠️ Research produced no output.")
         return
 
-    subject = _slugify_subject(topic)
+    subject = slugify_subject(topic)
     filename = f"RESEARCH-{datetime.date.today()}-{subject}.md"
     file_path = os.path.join(channel_path, filename)
     lineage = f"\n\n---\n**Lineage:**\n- Path: {file_path}\n- URI: viking://{guild.name}/{channel_name}/{filename}"
@@ -181,7 +181,7 @@ async def handle_omni(bot, channel, guild, query):
         await channel.send("⚠️ Omni synthesis produced no output.")
         return
 
-    subject = _slugify_subject(query)
+    subject = slugify_subject(query)
     filename = f"OMNI-{datetime.date.today()}-{subject}.md"
     file_path = os.path.join(channel_path, filename)
     lineage = f"\n\n---\n**Lineage:**\n- Path: {file_path}\n- URI: viking://{guild.name}/omni/{filename}"
@@ -227,14 +227,22 @@ async def handle_change_my_view(bot, channel, guild, instruction, interaction=No
     )
     
     new_view = await bot.agent.run_command(prompt, channel_name=channel_name)
-    
-    import re
-    new_view = re.sub(r"^```[a-zA-Z]*\n?", "", new_view)
-    new_view = re.sub(r"\n?```$", "", new_view)
+
+    new_view = new_view.strip()
+    new_view = re.sub(r"^\s*```[a-zA-Z]*\n?", "", new_view)
+    new_view = re.sub(r"\n?\s*```\s*$", "", new_view)
     new_view = new_view.strip()
 
     if current_view.strip() == new_view.strip():
-        new_view += "\n\n*(Updated based on instruction: " + instruction + ")*"
+        msg = "The LLM did not produce any changes to the current view. Try rephrasing your instruction."
+        if interaction:
+            try:
+                await interaction.edit_original_response(content=msg)
+            except discord.HTTPException:
+                await channel.send(msg)
+        else:
+            await channel.send(msg)
+        return
 
     proposal_id = bot._create_proposal(
         channel_name=channel_name,
