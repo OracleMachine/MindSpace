@@ -68,10 +68,12 @@ class GoogleGenAIBrain(LLMBrain):
             merged_tools.append({"google_search": {}})
             kwargs["tools"] = merged_tools
             kwargs["automatic_function_calling"] = types.AutomaticFunctionCallingConfig(disable=False)
+            # Required when mixing built-in server-side tools (google_search) with function calls.
+            kwargs["tool_config"] = types.ToolConfig(include_server_side_tool_invocations=True)
         elif tools:
             kwargs["tools"] = tools
             kwargs["automatic_function_calling"] = types.AutomaticFunctionCallingConfig(disable=False)
-        
+
         return types.GenerateContentConfig(**kwargs)
 
     def run_command(self, instruction: str, context: str = None) -> str:
