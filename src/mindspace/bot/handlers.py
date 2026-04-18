@@ -49,10 +49,7 @@ class ActiveCommandHandler:
                 await bot.handle_sync(message.channel, message.guild)
             return True
         if cmd == "change_my_view":
-            if not args:
-                await message.channel.send("Usage: `!change_my_view [instruction]`")
-            else:
-                await services.handle_change_my_view(bot, message.channel, message.guild, args)
+            await services.handle_change_my_view(bot, message.channel, message.guild, args)
             return True
 
         return False

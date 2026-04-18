@@ -142,9 +142,9 @@ class MindSpaceBot(discord.Client):
             await interaction.response.defer(thinking=True)
             await services.handle_research(self, interaction.channel, interaction.guild, topic, interaction=interaction)
 
-        @self.tree.command(name="change_my_view", description="Update the static mindset (view.md) for this channel.")
+        @self.tree.command(name="change_my_view", description="Update or view the static mindset (view.md) for this channel.")
         @app_commands.describe(instruction="How to update the core mindset (e.g., 'Emphasize local-first development')")
-        async def cmd_change_my_view(interaction: discord.Interaction, instruction: str):
+        async def cmd_change_my_view(interaction: discord.Interaction, instruction: str = None):
             await interaction.response.defer(thinking=True)
             await services.handle_change_my_view(self, interaction.channel, interaction.guild, instruction, interaction=interaction)
 

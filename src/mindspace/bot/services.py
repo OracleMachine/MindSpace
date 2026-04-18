@@ -198,6 +198,18 @@ async def handle_change_my_view(bot, channel, guild, instruction, interaction=No
     channel_name = channel.name
     current_view = bot.kb.get_view(channel_name)
     
+    if not instruction or not instruction.strip():
+        # User just wants to view the current mindset
+        msg = f"**Current Mindset (view.md) for #{channel_name}:**\n\n{current_view if current_view else '(empty)'}"
+        if interaction:
+            try:
+                await interaction.edit_original_response(content=msg)
+            except discord.HTTPException:
+                await channel.send(msg)
+        else:
+            await channel.send(msg)
+        return
+
     status_msg = None
     if not interaction:
         status_msg = await channel.send(f"🔄 Thinking about your mindset change: {instruction}...")
