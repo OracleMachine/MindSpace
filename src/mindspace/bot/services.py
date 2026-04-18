@@ -200,7 +200,13 @@ async def handle_change_my_view(bot, channel, guild, instruction, interaction=No
     
     if not instruction or not instruction.strip():
         # User just wants to view the current mindset
-        msg = f"**Current Mindset (view.md) for #{channel_name}:**\n\n{current_view if current_view else '(empty)'}"
+        msg = (
+            f"**Current Mindset (view.md) for #{channel_name}:**\n\n"
+            f"{current_view if current_view else '(empty)'}\n\n"
+            f"---\n"
+            f"💡 *To update this view, use the command again with an instruction. For example:*\n"
+            f"`/change_my_view instruction: Emphasize local-first development`"
+        )
         if interaction:
             try:
                 await interaction.edit_original_response(content=msg)
