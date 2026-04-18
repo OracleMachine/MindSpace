@@ -53,8 +53,18 @@ class Brains:
     _brains = _cfg.get("brains", {})
     DIALOGUE_TYPE = _brains.get("dialogue_type", BrainType.GOOGLE_SDK)
     COMMAND_TYPE = _brains.get("command_type", BrainType.GEMINI_CLI)
-    GEMINI_SDK_MODEL = _brains.get("gemini_sdk_model", "gemini-3-flash-preview")
-    GEMINI_CLI_MODEL = _brains.get("gemini_cli_model", "auto-gemini-3")
+    
+    ENABLE_GOOGLE_SEARCH = _brains.get("enable_google_search")
+    if ENABLE_GOOGLE_SEARCH is None:
+        raise ValueError("Configuration error: 'brains.enable_google_search' must be explicitly set to true or false in config.yaml.")
+        
+    GEMINI_SDK_MODEL = _brains.get("gemini_sdk_model")
+    if GEMINI_SDK_MODEL is None:
+        raise ValueError("Configuration error: 'brains.gemini_sdk_model' must be explicitly set in config.yaml.")
+        
+    GEMINI_CLI_MODEL = _brains.get("gemini_cli_model")
+    if GEMINI_CLI_MODEL is None:
+        raise ValueError("Configuration error: 'brains.gemini_cli_model' must be explicitly set in config.yaml (e.g., 'auto-gemini-3').")
 
 class Conversation:
     _conv = _cfg.get("conversation", {})

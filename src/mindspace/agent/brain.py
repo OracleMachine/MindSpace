@@ -61,10 +61,18 @@ class GoogleGenAIBrain(LLMBrain):
         kwargs = {}
         if system_ctx:
             kwargs["system_instruction"] = system_ctx
-        if tools:
+        
+        # Inject Google Search tool if enabled in config
+        if config.Brains.ENABLE_GOOGLE_SEARCH:
+            merged_tools = list(tools) if tools else []
+            merged_tools.append({"google_search": {}})
+            kwargs["tools"] = merged_tools
+            kwargs["automatic_function_calling"] = types.AutomaticFunctionCallingConfig(disable=False)
+        elif tools:
             kwargs["tools"] = tools
             kwargs["automatic_function_calling"] = types.AutomaticFunctionCallingConfig(disable=False)
-        return types.GenerateContentConfig(**kwargs) if kwargs else None
+        
+        return types.GenerateContentConfig(**kwargs)
 
     def run_command(self, instruction: str, context: str = None) -> str:
         full_prompt = self._build_run_prompt(instruction, context)
