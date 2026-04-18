@@ -107,7 +107,10 @@ class MindSpaceBot(discord.Client):
         """Commit and fire the view-tree challenger in the background.
 
         - view_scope=None: content commit. For each folder touched in this
-          commit within `channel`'s KB folder, fire a local-view challenge.
+          commit within `channel`'s KB folder, fire BOTH the local-view
+          challenge (is the folder's own view still accurate?) AND the
+          upward consistency check (are ancestor views still consistent
+          given the new evidence?). New information always propagates upward.
         - view_scope=(channel_name, rel_folder): a view.md was just committed
           at that scope. Fire the upward consistency cascade (cascade_mode
           "default"), and additionally the downward sweep when the commit
@@ -134,6 +137,9 @@ class MindSpaceBot(discord.Client):
                         continue
                     asyncio.create_task(
                         services.challenge_local_view(self, channel, guild, chan_name, rel_folder)
+                    )
+                    asyncio.create_task(
+                        services.check_upward_consistency(self, channel, guild, chan_name, rel_folder)
                     )
         except Exception as e:
             logger.warning(f"save_and_challenge: scheduling challenger failed: {e}")
@@ -192,10 +198,10 @@ class MindSpaceBot(discord.Client):
             await interaction.response.defer(thinking=True)
             await services.handle_omni(self, interaction.channel, interaction.guild, query)
 
-        @self.tree.command(name="walkthrough_views", description="Walk the view tree for this channel: challenge each subfolder's view and check parent/child consistency.")
-        async def cmd_walkthrough_views(interaction: discord.Interaction):
+        @self.tree.command(name="view_down_check", description="Top-down view sweep: re-challenge every subfolder view and check each against the parent stance.")
+        async def cmd_view_down_check(interaction: discord.Interaction):
             await interaction.response.defer(thinking=True)
-            await services.handle_walkthrough_views(self, interaction.channel, interaction.guild, interaction=interaction)
+            await services.handle_view_down_check(self, interaction.channel, interaction.guild, interaction=interaction)
 
         @self.tree.command(name="help", description="Post the MindSpace usage guide to #notification.")
         async def cmd_help(interaction: discord.Interaction):

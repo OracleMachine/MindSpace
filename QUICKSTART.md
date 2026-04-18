@@ -100,7 +100,7 @@ The bot supports both **Slash Commands** (`/command`) and **Prefix Commands** (`
 | `!research [topic]` | Deep-dive on a topic by querying **OpenViking** (vector search) and **PageIndex** (document analysis). Generates a cited research paper. | `RESEARCH-YYYY-MM-DD-subject.md` |
 | `!omni [query]` | Cross-references the **entire knowledge base** (all channels) to answer broad queries with citations. | `OMNI-YYYY-MM-DD-subject.md` |
 | `!change_my_view [instruction]` | Update the channel's root stance (`view.md`) via a reviewed proposal. Accepting also fires a downward consistency sweep that emits proposals for any subfolder view that now conflicts. | `view.md` |
-| `!walkthrough_views` | Re-challenge every subfolder's local view against its evidence, then run a downward consistency sweep from the channel root. Catches drift the per-commit hook missed. | — |
+| `!view_down_check` | Top-down sweep: re-challenge every subfolder's local view against its evidence, then check each descendant view against the channel-root stance. Catches drift the per-commit hook missed. | — |
 | `!sync` | Manually rebuild the vector index for the current channel. | — |
 
 ### Knowledge Ingestion Workflows

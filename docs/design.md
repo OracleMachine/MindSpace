@@ -81,7 +81,7 @@ graph TD
 | Module | Responsibility |
 | :--- | :--- |
 | `bot.py` | Discord event loop (`on_message`), command routing (prefix `!` and slash `/`), startup sync. Single `KnowledgeBaseManager` instance (`self.kb`) initialized in `on_ready`. `on_guild_join` enforces the single-server constraint by leaving immediately if `self.kb` is already set. |
-| `services.py` | Core business logic for all active commands (`!organize`, `!consolidate`, `!research`, `!omni`, `!change_my_view`) plus the view-tree challenger (`challenge_local_view`, `check_upward_consistency`, `check_downward_consistency`, `handle_walkthrough_views`). |
+| `services.py` | Core business logic for all active commands (`!organize`, `!consolidate`, `!research`, `!omni`, `!change_my_view`) plus the view-tree challenger (`challenge_local_view`, `check_upward_consistency`, `check_downward_consistency`, `handle_view_down_check`). |
 | `prompts.py` | Centralized repository for all LLM prompt templates used by the agent and services. |
 | `agent.py` | LLM abstraction. `GoogleGenAIBrain` for dialogue (chat, URL/file analysis, commit messages). `GeminiCLIBrain` for commands — exposes `stream(prompt, cwd)` returning a `CliStream` async-iterable handle; env (`GEMINI_CLI_HOME`) and args (`-y`, `-m`) are always injected. |
 | `manager.py` | Filesystem writes, Git commits, orchestrated `save_state` (commit + indexing; returns `{touched, sha}` so callers can drive the view-tree challenger), per-channel conversation history, stream reads, and the hierarchical view helpers (`read_view`, `write_view`, `get_view_chain`, `list_subfolders_with_content`, `read_folder_context`). |
@@ -241,14 +241,14 @@ Three primitives live in `services.py`:
 | Primitive | Trigger | Effect |
 | :--- | :--- | :--- |
 | `challenge_local_view(channel, rel_folder)` | Content-file commit in `rel_folder` (ingest, organize, research, omni, accepted non-view proposal) | Distills a fresh view from the folder's evidence via `DISTILL_LOCAL_VIEW_PROMPT`. If the LLM emits the `VIEW_OK` sentinel, no-op; otherwise emits a proposal for `<rel_folder>/view.md`. Lazy-bootstraps a view when the folder has content but no existing view. |
-| `check_upward_consistency(channel, rel_folder)` | A `view.md` proposal at `rel_folder` is accepted | Walks each ancestor view, runs `DETECT_VIEW_CONFLICT_PROMPT` between it and the newly-updated descendant. Emits one proposal per conflicting ancestor — the agent rewrites the ancestor to align, the user approves each in turn. |
-| `check_downward_consistency(channel, rel_folder)` | A `/change_my_view` proposal is accepted (or the walkthrough sweep) | Same prompt inverted — walks every descendant view and emits a proposal per child that now disagrees with the (just-updated) parent. |
+| `check_upward_consistency(channel, rel_folder)` | **Every content commit in `rel_folder`** (fires alongside `challenge_local_view` — new information always propagates upward), and additionally whenever a `view.md` proposal at `rel_folder` is accepted | Walks each ancestor view, runs `DETECT_VIEW_CONFLICT_PROMPT` between it and the current descendant view. Emits one proposal per conflicting ancestor — the agent rewrites the ancestor to align, the user approves each in turn. |
+| `check_downward_consistency(channel, rel_folder)` | A `/change_my_view` proposal is accepted (or the view-down-check sweep) | Same prompt inverted — walks every descendant view and emits a proposal per child that now disagrees with the (just-updated) parent. |
 
 **Direction-gating.** A view-file commit cannot re-trigger its own local challenge — that would loop on itself. `save_and_challenge(view_scope=…)` dispatches only the ancestor walk after a view commit, and the caller (`ProposalView.apply`) sets `view_scope` based on whether the accepted path ends in `view.md`.
 
 **Cascade tagging.** Most view-proposal acceptances should propagate only upward (the challenger already emitted the local update deliberately — children weren't surprised). `/change_my_view` is the exception: it represents direct user intent at the root, so its proposal is tagged `cascade="both"` and its acceptance fires both upward and downward sweeps.
 
-**No periodic loop.** There is no background scheduler. Drift that slips through the event-driven path (e.g., multi-folder commits, long-quiet channels) is reconciled by the manual `/walkthrough_views` command, which local-challenges every content folder in the channel and then runs a downward consistency pass from the root.
+**No periodic loop.** There is no background scheduler. Drift that slips through the event-driven path (e.g., multi-folder commits, long-quiet channels) is reconciled by the manual `/view_down_check` command, which local-challenges every content folder in the channel and then runs a downward consistency pass from the root.
 
 **Proposal protection.** `handle_propose_update` (the dialogue tool's entry point) refuses any path whose basename is `view.md`, at every depth. View edits only enter the filesystem through the challenger, the conflict detector, or `/change_my_view` — never through ambient dialogue.
 
@@ -291,7 +291,7 @@ For structured KB maintenance (updating existing `.md` files, models, or researc
 | `!research [topic]` / `/research` | Deep-dive on topic using Viking + PageIndex context, git commit | `RESEARCH-<date>-<subject>.md` |
 | `!omni [query]` / `/omni` | Cross-KB synthesis across **all** channel folders (global Viking traversal), git commit | `OMNI-<date>-<subject>.md` |
 | `!change_my_view [instruction]` / `/change_my_view` | Update the channel-root view via a reviewed proposal. Accepting also fires a downward consistency sweep that emits proposals for every subfolder view that drifts. | `view.md` |
-| `!walkthrough_views` / `/walkthrough_views` | Re-challenge every content folder's local view, then a downward consistency sweep from the channel root. | — |
+| `!view_down_check` / `/view_down_check` | Top-down sweep: re-challenge every content folder's local view, then a downward consistency sweep from the channel root. | — |
 | `!sync` / `/sync` | Manually rebuild the vector index for the current channel | — |
 | URL in message | Replies instructing user to paste content manually | — |
 | File attachment (no @mention) | Content-routed ingestion: LLM picks a subfolder within the channel and renames by content, git commit | — |

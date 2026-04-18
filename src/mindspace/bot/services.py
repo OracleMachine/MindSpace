@@ -161,12 +161,14 @@ async def check_downward_consistency(bot, channel, guild, channel_name: str, rel
             logger.info(f"**VIEW_CONSISTENCY**: child proposal at {rel_path} for #{channel_name}", guild)
 
 
-async def handle_walkthrough_views(bot, channel, guild, interaction=None):
-    """Walk every content folder in the current channel: re-challenge local views and
-    run a downward consistency sweep from the channel root."""
+async def handle_view_down_check(bot, channel, guild, interaction=None):
+    """Walk the view tree from the channel root downward: re-challenge each
+    content folder's local view against its evidence, then run a downward
+    consistency sweep from the root so every descendant view is checked against
+    the parent stance. Meant for ad-hoc whole-channel reconciliation."""
     channel_name = channel.name
     await bot.send_message_safe(
-        channel, f"🌳 Walking view tree for #{channel_name}...", interaction=interaction
+        channel, f"🌳 Running downward view check for #{channel_name}...", interaction=interaction
     )
     folders = bot.kb.list_subfolders_with_content(channel_name)
     if not folders:
@@ -177,7 +179,7 @@ async def handle_walkthrough_views(bot, channel, guild, interaction=None):
     for rel_folder in folders:
         await challenge_local_view(bot, channel, guild, channel_name, rel_folder)
     await check_downward_consistency(bot, channel, guild, channel_name, "")
-    logger.info(f"**WALKTHROUGH**: scanned #{channel_name} ({len(folders)} folders)", guild)
+    logger.info(f"**VIEW_DOWN_CHECK**: scanned #{channel_name} ({len(folders)} folders)", guild)
 
 def extract_title(markdown: str) -> str | None:
     for line in markdown.splitlines():

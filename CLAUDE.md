@@ -41,7 +41,7 @@ Thought/
 ### Module Responsibilities
 
 - **`bot.py`** — `MindSpaceBot(discord.Client)`: The entry point. Handles `on_message` and routes to commands (delegated to `services.py`), file ingestion, or passive dialogue. Wraps tools with async progress decorators for Discord status updates.
-- **`services.py`** — Core business logic for active commands (`!organize`, `!consolidate`, `!research`, `!omni`, `!change_my_view`) and the view-tree challenger (`challenge_local_view`, `check_upward_consistency`, `check_downward_consistency`, `handle_walkthrough_views`).
+- **`services.py`** — Core business logic for active commands (`!organize`, `!consolidate`, `!research`, `!omni`, `!change_my_view`) and the view-tree challenger (`challenge_local_view`, `check_upward_consistency`, `check_downward_consistency`, `handle_view_down_check`).
 - **`prompts.py`** — Centralized repository for all LLM prompt templates used by the agent and services.
 - **`agent.py`** — `MindSpaceAgent`: Dual-brain LLM abstraction. `GoogleGenAIBrain` for dialogue (async chat via `achat`, URL/file analysis, commit messages). `GeminiCLIBrain` for commands — owns the `gemini -y` subprocess, env (`GEMINI_CLI_HOME`) and args injection, and exposes `stream(prompt, cwd)` -> `CliStream` async-iterable handle.
 - **`tools.py`** — `MindSpaceTools`: closure-bound tool functions exposed to the LLM during passive dialogue (`list_channel_files`, `search_channel_knowledge_base`, `search_global_knowledge_base`, `list_global_files`, `get_view_chain`, `record_thought`, `propose_update`). `propose_update` refuses any path whose basename is `view.md` at any depth — view edits only flow through the challenger / `/change_my_view`.
@@ -54,7 +54,7 @@ Thought/
 
 - **Tool-first architecture**: all structured bot behaviors (KB retrieval, thought recording, side-effects) are expressed as typed tool calls, not in-band prompt conventions. See `Agent/design.md` section 5.0 for rationale.
 - **Tools-first dialogue**: the dialogue brain receives NO pre-loaded KB context (beyond the view chain). The model must call `search_channel_knowledge_base` to retrieve data. This keeps prompts lean and ensures tool progress UI is exercised.
-- **View hierarchy**: every folder under a channel may hold its own `view.md` (stance/opinion/conclusion at that scope). The channel-root view rolls up the subtree. An event-driven challenger wired into `save_state` re-distills the touched folder's view after each commit and walks upward after a view update to emit conflict proposals for any inconsistent ancestor. `/change_my_view` additionally fires the downward cascade. See `docs/design.md` §5.6.
+- **View hierarchy**: every folder under a channel may hold its own `view.md` (stance/opinion/conclusion at that scope). The channel-root view rolls up the subtree. An event-driven challenger wired into `save_state` re-distills the touched folder's view after each content commit AND walks upward to check every ancestor — new information always propagates up. `/change_my_view` additionally fires the downward cascade. See `docs/design.md` §5.6.
 
 ### LLM Brain Selection
 
