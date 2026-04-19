@@ -1,13 +1,9 @@
 import os
-import sys
-import select
 import asyncio
 import discord
 from mindspace.core import config
 from mindspace.core.logger import logger
 from mindspace.bot.client import MindSpaceBot
-
-REINDEX_PROMPT_TIMEOUT = 5
 
 def _preflight_check():
     """Verify dependencies and API keys."""
@@ -42,37 +38,21 @@ def _preflight_check():
             await pool.close()
         asyncio.run(_probe())
 
-def _prompt_reindex_confirmation(timeout: int = REINDEX_PROMPT_TIMEOUT) -> bool:
-    """Ask the operator to opt in to a full KB re-index. Default on timeout / non-TTY is skip,
-    since embedding API calls are billed per token."""
-    if not sys.stdin.isatty():
-        logger.info("Startup Indexing: no TTY attached; skipping re-index.")
-        return False
-
-    print(f"\n[Startup] Press ENTER to run full KB re-index (otherwise skip to save tokens).", flush=True)
-    for remaining in range(timeout, 0, -1):
-        print(f"  ...skipping in {remaining}s ", end="\r", flush=True)
-        ready, _, _ = select.select([sys.stdin], [], [], 1)
-        if ready:
-            sys.stdin.readline()
-            print("\n  -> confirmed; proceeding with re-index.", flush=True)
-            return True
-    print("\n  -> timeout; skipping re-index.", flush=True)
-    return False
-
 def _startup_indexing():
-    """Perform initial indexing, gated on operator confirmation."""
-    if not _prompt_reindex_confirmation():
-        logger.info("Startup Indexing: skipped.")
-        return
-
+    """Perform initial indexing. The viking hash-cache layer short-circuits
+    automatically when the KB is unchanged since the last sync, so this is
+    effectively free in the common case. Set `MINDSPACE_FORCE_REINDEX=1` in
+    the environment to bypass the cache and force a full-tree rebuild."""
+    force = os.environ.get("MINDSPACE_FORCE_REINDEX") == "1"
+    if force:
+        logger.info("Startup Indexing: MINDSPACE_FORCE_REINDEX=1 — forcing full rebuild.")
     logger.info("Startup Indexing: initializing...")
     from mindspace.knowledgebase.viking import VikingContextManager
     from mindspace.knowledgebase.pageindex import PageIndexManager
 
     viking = VikingContextManager(config.Paths.CHANNELS)
     pi = PageIndexManager()
-    viking.rebuild_index()
+    viking.rebuild_index(force=force)
     pi.rebuild_index(config.Paths.CHANNELS)
     viking.close()
     logger.info("Startup Indexing: complete.")
