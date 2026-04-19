@@ -159,7 +159,7 @@ DISTILL_LOCAL_VIEW_PROMPT = """You are challenging a local view.md in the MindSp
 
 A view.md represents the user's *stance, opinion, conclusion, and insight* at a given scope. Supporting files in the same folder are the *facts, reasoning, and evidence* that should ground the view.
 
-SCOPE: #{channel_name}/{rel_folder}
+SCOPE: {scope_label}
 
 CURRENT LOCAL VIEW (may be empty if none has been established at this scope):
 ---

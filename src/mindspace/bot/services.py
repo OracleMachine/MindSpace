@@ -19,8 +19,7 @@ def _scope_label(channel_name: str, rel_folder: str) -> str:
 async def _run_distill_prompt(bot, channel_name: str, rel_folder: str,
                                current_view: str, local_context: str) -> str:
     prompt = prompts.DISTILL_LOCAL_VIEW_PROMPT.format(
-        channel_name=channel_name,
-        rel_folder=rel_folder or "<channel-root>",
+        scope_label=_scope_label(channel_name, rel_folder),
         current_view=current_view or "(none yet)",
         local_context=local_context or "(empty)",
     )

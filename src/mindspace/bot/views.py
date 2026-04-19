@@ -18,7 +18,14 @@ _DIFF_EMBED_LIMIT = 4000  # headroom under Discord's 4096-char embed description
 
 
 def _format_proposal_message(rel_path: str, rationale: str, diff_text: str):
-    """Build a proposal message payload."""
+    """Build a proposal message payload.
+
+    Always attaches the full diff as a `.diff` file alongside the inline
+    embed preview. The attachment is the reliable fallback — embeds can be
+    visually collapsed on mobile clients or skipped entirely if the inline
+    preview is empty (e.g. whitespace-only change), so the file is the
+    user's guaranteed access to the actual changes.
+    """
     content = (
         f"\U0001f4a1 **KB Update Proposal for `{rel_path}`**\n"
         f"> {rationale}"
@@ -27,19 +34,20 @@ def _format_proposal_message(rel_path: str, rationale: str, diff_text: str):
     fence_overhead = len("```diff\n\n```")
     inline_limit = _DIFF_EMBED_LIMIT - fence_overhead
 
-    attachment = None
     if len(diff_text) > inline_limit:
-        marker = "\n... (truncated — full diff attached)"
+        marker = "\n... (truncated — full diff in attachment below)"
         cut = inline_limit - len(marker)
         preview = diff_text[:cut].rsplit("\n", 1)[0] + marker
-        safe_name = rel_path.replace("/", "_").replace("\\", "_") + ".diff"
-        attachment = discord.File(
-            io.BytesIO(diff_text.encode("utf-8")), filename=safe_name
-        )
     else:
         preview = diff_text
 
+    safe_name = rel_path.replace("/", "_").replace("\\", "_") + ".diff"
+    attachment = discord.File(
+        io.BytesIO(diff_text.encode("utf-8")), filename=safe_name
+    )
+
     embed = discord.Embed(
+        title="📝 Proposed changes",
         description=f"```diff\n{preview}\n```",
         color=0x3498db,
     )
