@@ -39,10 +39,12 @@ def _preflight_check():
         asyncio.run(_probe())
 
 def _startup_indexing():
-    """Perform initial indexing. The viking hash-cache layer short-circuits
-    automatically when the KB is unchanged since the last sync, so this is
-    effectively free in the common case. Set `MINDSPACE_FORCE_REINDEX=1` in
-    the environment to bypass the cache and force a full-tree rebuild."""
+    """Perform initial indexing. By default the viking sync runs file-only
+    (no summary regeneration, 0 LLM tokens) — summaries are refreshed lazily
+    when files actually change via `index_file` (record_thought, proposals,
+    active commands), or explicitly via the `/sync` Discord command.
+    Set `MINDSPACE_FORCE_REINDEX=1` in the environment to re-seed everything
+    from scratch including summaries."""
     force = os.environ.get("MINDSPACE_FORCE_REINDEX") == "1"
     if force:
         logger.info("Startup Indexing: MINDSPACE_FORCE_REINDEX=1 — forcing full rebuild.")

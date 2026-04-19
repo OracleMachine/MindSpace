@@ -1,20 +1,10 @@
 import os
-import json
-import hashlib
+import re
+from datetime import datetime, timezone
 from pathlib import Path
 import openviking as ov  # hard import — fails fast if package not installed
 from mindspace.core import config
 from mindspace.core.logger import logger
-
-# MindSpace-level fingerprint cache. OpenViking's internal hash check skips
-# file-content re-embedding (0 embedding tokens for unchanged files) but NOT
-# directory-level .abstract.md / .overview.md LLM summary regeneration: any
-# add_resource call with build_index=True (the default) re-runs the
-# SemanticProcessor bottom-up, burning 80K-330K LLM tokens per startup on
-# a dozen-channel KB. This cache lives next to the OpenViking data and lets
-# us skip add_resource entirely when every .md file's sha256 is unchanged,
-# or scope the call to just the channels whose aggregate changed.
-_HASH_CACHE_FILENAME = ".mindspace_hash_cache.json"
 
 # Single source of truth for where channel content lives inside OpenViking.
 # Previously we had two conflicting conventions: full-tree sync wrote under
@@ -31,82 +21,62 @@ def _channel_dir_uri(channel_name: str) -> str:
     return f"{_CHANNELS_ROOT_URI}/{channel_name}/"
 
 
-def _file_sha256(path: str) -> str:
-    """Stream-hash a file in 64KB chunks — constant memory regardless of size."""
-    h = hashlib.sha256()
-    with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(65536), b""):
-            h.update(chunk)
-    return h.hexdigest()
+# Python's datetime only supports microseconds; trim OV's nanosecond precision
+# before fromisoformat so "2026-02-11T16:52:16.256334192+08:00" -> ".256334+08:00".
+_NANOS_TRIM_RE = re.compile(r"(\.\d{6})\d+")
 
 
-def _iter_channel_md_files(channel_root: str) -> list[tuple[str, str]]:
-    """Walk a channel folder and return [(rel_path, abs_path), ...] sorted by
-    rel_path. Mirrors the OpenViking exclude set used in rebuild_index — only
-    .md files, no view.md (view.md is stance/opinion, not source material and
-    must not flow into vector retrieval)."""
-    results: list[tuple[str, str]] = []
-    for dirpath, _, filenames in os.walk(channel_root):
-        for fn in filenames:
-            if fn == "view.md" or not fn.endswith(".md"):
-                continue
-            abs_path = os.path.join(dirpath, fn)
-            results.append((os.path.relpath(abs_path, channel_root), abs_path))
-    results.sort(key=lambda t: t[0])
-    return results
-
-
-def _hash_channel(channel_root: str) -> tuple[str, dict[str, str]]:
-    """Return (channel_aggregate_sha, {rel_path: file_sha}) for a single channel.
-    The aggregate is deterministic across runs: sort rel_paths, join
-    `<rel>:<sha>` lines, hash the whole blob."""
-    files = {rel: _file_sha256(p) for rel, p in _iter_channel_md_files(channel_root)}
-    body = "\n".join(f"{p}:{h}" for p, h in sorted(files.items()))
-    return hashlib.sha256(body.encode()).hexdigest(), files
-
-
-def _hash_tree(root_path: str) -> dict:
-    """Walk every immediate child dir of Channels/ and produce the full cache
-    structure: {"aggregate": <tree_sha>, "channels": {<name>: {"aggregate": ..., "files": {...}}}}.
-    Tree aggregate is a hash of sorted (channel_name, channel_aggregate) pairs."""
-    channels: dict[str, dict] = {}
-    if os.path.isdir(root_path):
-        for name in sorted(os.listdir(root_path)):
-            chan_dir = os.path.join(root_path, name)
-            if not os.path.isdir(chan_dir):
-                continue
-            agg, files = _hash_channel(chan_dir)
-            channels[name] = {"aggregate": agg, "files": files}
-    body = "\n".join(f"{n}:{v['aggregate']}" for n, v in sorted(channels.items()))
-    return {"aggregate": hashlib.sha256(body.encode()).hexdigest(), "channels": channels}
-
-
-def _load_hash_cache(cache_path: str) -> dict | None:
+def _parse_ov_modtime(s: str | None) -> datetime | None:
+    """Parse OpenViking's modTime (ISO 8601, possibly 'Z' suffix or nanosecond
+    precision) to a timezone-aware datetime. Returns None on parse failure —
+    the caller treats that as 'no OV data, assume dirty'."""
+    if not s:
+        return None
+    normalized = _NANOS_TRIM_RE.sub(r"\1", s.replace("Z", "+00:00"))
     try:
-        with open(cache_path) as f:
-            return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
+        dt = datetime.fromisoformat(normalized)
+        return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+    except (ValueError, TypeError):
         return None
 
 
-def _save_hash_cache(cache_path: str, cache: dict) -> None:
-    tmp_path = cache_path + ".tmp"
-    with open(tmp_path, "w") as f:
-        json.dump(cache, f, indent=2)
-    os.replace(tmp_path, cache_path)  # atomic on POSIX
+def _max_local_mtime(channel_dir: Path) -> datetime | None:
+    """Max mtime across all .md files under `channel_dir` (excluding view.md,
+    to mirror the OpenViking exclude set). Returns None for an empty or
+    non-existent channel."""
+    if not channel_dir.is_dir():
+        return None
+    best: float | None = None
+    for p in channel_dir.rglob("*.md"):
+        if p.name == "view.md":
+            continue
+        try:
+            m = p.stat().st_mtime
+        except OSError:
+            continue
+        if best is None or m > best:
+            best = m
+    if best is None:
+        return None
+    return datetime.fromtimestamp(best, tz=timezone.utc)
 
 
-def _diff_changed_channels(current: dict, cached: dict | None) -> list[str]:
-    """Return channel names whose aggregate changed OR that were added/removed."""
-    cur_ch = current.get("channels") or {}
-    old_ch = (cached or {}).get("channels") or {}
-    changed: set[str] = set()
-    for name in cur_ch.keys() | old_ch.keys():
-        cur_agg = (cur_ch.get(name) or {}).get("aggregate")
-        old_agg = (old_ch.get(name) or {}).get("aggregate")
-        if cur_agg != old_agg:
-            changed.add(name)
-    return sorted(changed)
+def _max_remote_modtime(client, channel_uri: str) -> datetime | None:
+    """Max modTime across every entry returned by OpenViking's `tree()` under
+    `channel_uri`. Includes OV's own `.abstract.md` / `.overview.md` entries —
+    which is exactly what we want, since their modTime tracks the last time
+    OV summarized this channel, i.e. the freshness floor of our index.
+    Returns None if OV has nothing there yet (treated as 'dirty')."""
+    try:
+        entries = client.tree(channel_uri)
+    except Exception:
+        return None
+    best: datetime | None = None
+    for e in entries or []:
+        dt = _parse_ov_modtime(e.get("modTime"))
+        if dt is not None and (best is None or dt > best):
+            best = dt
+    return best
 
 
 def _format_token_summary(telemetry: dict | None) -> str:
@@ -201,18 +171,20 @@ class VikingContextManager:
 
     def rebuild_index(self, channel_name: str = None, force: bool = False):
         """
-        Sync disk state with OpenViking. Uses native directory mirroring.
+        Sync disk state with OpenViking.
 
-        - `channel_name=None` (the startup path) runs the hash-gated full rebuild:
-          short-circuits when the MindSpace fingerprint matches the cache,
-          otherwise scopes add_resource to just the channels whose aggregate
-          changed.
-        - `channel_name=<name>` always syncs that channel (used by the
-          per-channel path below and by any caller that already knows the
-          scope).
-        - `force=True` bypasses the hash cache and issues a full-tree sync.
-          Wired to the `MINDSPACE_FORCE_REINDEX=1` env var for operator
-          overrides.
+        - `channel_name=None, force=False` (startup): per-channel dirty check.
+          For each channel on disk, compare the max local .md mtime against
+          the max modTime of OV's `tree(channel_uri)`. If local is newer
+          (or OV has no data) → that channel is dirty → sync with summaries
+          (`build_index=True`). Otherwise → file-only sync (`build_index=False`)
+          to keep OV's filesystem mirror aligned without burning LLM tokens.
+          No local cache; OV's own timestamps are the freshness marker.
+        - `channel_name=None, force=True`: full-tree rebuild with summaries
+          on. The "re-seed everything from scratch" escape hatch, wired to
+          `MINDSPACE_FORCE_REINDEX=1`.
+        - `channel_name=<name>`: single-channel rebuild with summaries on.
+          Used by `/sync` and by `_safe_search`'s stale-result retry.
 
         Uses `to=<exact target URI>` rather than `parent=<root>`. OpenViking's
         tree_builder calls `_resolve_unique_uri` on the `parent=` path when the
@@ -221,19 +193,100 @@ class VikingContextManager:
         exact URI, overwriting in place.
         """
         if channel_name is None:
-            self._full_rebuild(force=force)
+            if force:
+                logger.info(
+                    f"⚙️ OpenViking: forced full rebuild (MINDSPACE_FORCE_REINDEX=1); "
+                    f"syncing entire tree with summaries ({self.root_path})..."
+                )
+                self._invoke_add_resource(
+                    self.root_path, _CHANNELS_ROOT_URI,
+                    label=self.root_path, build_index=True,
+                )
+            else:
+                self._startup_sync_with_dirty_check()
             return
 
         self._ensure_channel_dir(channel_name)
         target_path = os.path.join(self.root_path, channel_name)
         target_uri = f"{_CHANNELS_ROOT_URI}/{channel_name}"
-        logger.info(f"⚙️ OpenViking: Syncing channel #{channel_name}...")
-        self._invoke_add_resource(target_path, target_uri, label=f"#{channel_name}")
+        logger.info(f"⚙️ OpenViking: Syncing channel #{channel_name} with summaries...")
+        self._invoke_add_resource(
+            target_path, target_uri, label=f"#{channel_name}", build_index=True,
+        )
 
-    def _invoke_add_resource(self, target_path: str, target_uri: str, label: str) -> bool:
-        """The actual OpenViking call. Returns True on success, False if the
-        client raised. Errors are logged, not re-raised — matching the prior
-        swallow-and-log behaviour."""
+    def _startup_sync_with_dirty_check(self):
+        """Per-channel startup dispatcher. Catches external edits that didn't
+        flow through `index_file` — a user editing files directly on disk
+        bumps their mtime, which ends up newer than OV's last-index modTime,
+        which flags the channel as dirty."""
+        root = Path(self.root_path)
+        if not root.is_dir():
+            logger.warning(
+                f"OpenViking: channels root {root} does not exist; "
+                f"skipping startup sync."
+            )
+            return
+
+        channel_dirs = sorted(
+            (p for p in root.iterdir() if p.is_dir() and not p.name.startswith(".")),
+            key=lambda p: p.name,
+        )
+        if not channel_dirs:
+            logger.info(f"OpenViking: no channels under {root}; nothing to sync.")
+            return
+
+        dirty: list[Path] = []
+        clean: list[Path] = []
+        for chan_dir in channel_dirs:
+            local = _max_local_mtime(chan_dir)
+            if local is None:
+                # Empty channel (no .md files) — skip entirely; nothing to sync.
+                continue
+            remote = _max_remote_modtime(self.client, f"{_CHANNELS_ROOT_URI}/{chan_dir.name}")
+            if remote is None or local > remote:
+                dirty.append(chan_dir)
+            else:
+                clean.append(chan_dir)
+
+        logger.info(
+            f"⚙️ OpenViking: startup dirty-check → "
+            f"{len(dirty)} dirty, {len(clean)} clean out of "
+            f"{len(channel_dirs)} channel(s)."
+            + (f" Dirty: {', '.join(p.name for p in dirty)}." if dirty else "")
+        )
+
+        for chan_dir in clean:
+            self._sync_channel_dir(chan_dir, build_index=False,
+                                   log=f"⚙️ OpenViking: #{chan_dir.name} up-to-date — file-only sync...")
+        for chan_dir in dirty:
+            self._sync_channel_dir(chan_dir, build_index=True,
+                                   log=f"⚙️ OpenViking: #{chan_dir.name} has external edits — refreshing summaries...")
+
+    def _sync_channel_dir(self, chan_dir: Path, *, build_index: bool, log: str):
+        """Single per-channel sync call. Ensures the channel URI exists, logs
+        the intent, and delegates to `_invoke_add_resource` with the chosen
+        summary flag."""
+        self._ensure_channel_dir(chan_dir.name)
+        chan_uri = f"{_CHANNELS_ROOT_URI}/{chan_dir.name}"
+        logger.info(log)
+        self._invoke_add_resource(
+            str(chan_dir), chan_uri, label=f"#{chan_dir.name}", build_index=build_index,
+        )
+
+    def _invoke_add_resource(
+        self, target_path: str, target_uri: str, label: str, build_index: bool,
+    ) -> bool:
+        """The actual OpenViking call. Returns True on success, False on error
+        (logged, not re-raised — matches the prior swallow-and-log contract).
+
+        `build_index=False` is the critical cheap path: OpenViking still
+        persists files to its internal filesystem (Phase 3 of the ingestion
+        pipeline runs unconditionally), but skips Phase 4 — the semantic
+        summarizer + vectorizer that burns LLM tokens regenerating
+        `.abstract.md` / `.overview.md` for every directory in the tree.
+        Safe at startup because existing vectors and summaries persist in
+        OV's store across runs; we only need to refresh them when files
+        actually change."""
         # `exclude` must be a comma-separated string — openviking's _parse_patterns
         # calls .strip()/.split(",") on it directly, so passing a list crashes.
         exclude_patterns = ",".join(
@@ -246,6 +299,7 @@ class VikingContextManager:
             # the sync was pure-CPU (zero tokens) or hit the Gemini embedding API.
             result = self.client.add_resource(
                 path=target_path, to=target_uri, exclude=exclude_patterns,
+                build_index=build_index,
                 wait=True, telemetry=True,
             )
             summary_line = _format_token_summary((result or {}).get("telemetry"))
@@ -259,73 +313,6 @@ class VikingContextManager:
         except Exception as e:
             logger.error(f"❌ OpenViking: Sync failed for {label}: {e}")
             return False
-
-    def _full_rebuild(self, force: bool):
-        """Hash-gated full rebuild. Compares a MindSpace-level fingerprint of
-        every indexable .md under Channels/ against a persisted cache; skips
-        OpenViking entirely when nothing changed, otherwise syncs only the
-        channels whose aggregate changed. Force=True bypasses the cache and
-        issues a single full-tree add_resource (same path as pre-hash-gate)."""
-        cache_path = os.path.join(config.Paths.VIKING_DATA, _HASH_CACHE_FILENAME)
-        current = _hash_tree(self.root_path)
-        cached = None if force else _load_hash_cache(cache_path)
-
-        if cached is not None and current["aggregate"] == cached.get("aggregate"):
-            logger.info(
-                f"✅ OpenViking: KB unchanged since last sync — skipping "
-                f"(tree_hash={current['aggregate'][:12]}, 0 tokens)"
-            )
-            return
-
-        if force:
-            logger.info(
-                f"⚙️ OpenViking: forced full rebuild (MINDSPACE_FORCE_REINDEX=1); "
-                f"syncing entire tree ({self.root_path})..."
-            )
-            ok = self._invoke_add_resource(self.root_path, _CHANNELS_ROOT_URI, label=self.root_path)
-            if ok:
-                _save_hash_cache(cache_path, current)
-            return
-
-        changed = _diff_changed_channels(current, cached)
-        if not changed:
-            # Tree aggregate differs but no channel aggregates do — can happen
-            # only if the cache file is malformed or was written from a different
-            # layout. Safest to do a full rebuild and re-seed the cache.
-            logger.warning(
-                "⚠️ OpenViking: hash cache inconsistent with current state; "
-                "running full-tree rebuild to re-seed."
-            )
-            ok = self._invoke_add_resource(self.root_path, _CHANNELS_ROOT_URI, label=self.root_path)
-            if ok:
-                _save_hash_cache(cache_path, current)
-            return
-
-        logger.info(
-            f"⚙️ OpenViking: hash diff in {len(changed)} channel(s): "
-            f"{', '.join(changed)}"
-        )
-        all_ok = True
-        for name in changed:
-            # Channels in cache but not on disk were removed externally.
-            # Nothing to sync here; OpenViking cleanup of the stale URI is
-            # out of scope for this change.
-            if name not in current["channels"]:
-                logger.info(f"⚙️ OpenViking: channel #{name} removed from disk; skipping sync.")
-                continue
-            self._ensure_channel_dir(name)
-            target_path = os.path.join(self.root_path, name)
-            target_uri = f"{_CHANNELS_ROOT_URI}/{name}"
-            logger.info(f"⚙️ OpenViking: Syncing channel #{name}...")
-            if not self._invoke_add_resource(target_path, target_uri, label=f"#{name}"):
-                all_ok = False
-        if all_ok:
-            _save_hash_cache(cache_path, current)
-        else:
-            logger.warning(
-                "⚠️ OpenViking: at least one channel sync failed; not updating "
-                "hash cache (next startup will retry)."
-            )
 
     def _safe_search(self, query: str, target_uri: str, limit: int, channel_name: str = None, is_retry: bool = False) -> str:
         """
