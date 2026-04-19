@@ -5,7 +5,7 @@
 ## How messages are processed
 - **Plain text** → Passive dialogue. The bot replies using tool-based KB retrieval, records insights silently via `record_thought`, and may proactively pop up a **reviewed proposal UI** via `propose_update` if it determines a structured file needs updating.
 - **URL** → The bot will instruct you to paste the content manually for ingestion.
-- **File drop** → Autoroute into a content-chosen subfolder, *or* a reviewed proposal when you @mention the bot on a `.md` file. See the next section for the full workflow.
+- **File drop** → Autoroute into a content-chosen subfolder, *or* a reviewed proposal when you @mention the bot on a `.md`, `.markdown`, or `.txt` file. See the next section for the full workflow.
 
 ## File drops in detail
 The bot branches on a single question: **did you @mention me?** That's the explicit signal for the heavy, reviewed path. Otherwise, the drop is silent and fire-and-forget.
@@ -17,12 +17,12 @@ The bot branches on a single question: **did you @mention me?** That's the expli
 4. PDFs are uploaded to **PageIndex** for deep document Q&A. Text files get a one-line LLM summary echoed back to the channel.
 5. Everything is committed to Git with a generated message. The final path is posted in the source channel so you can see where it landed.
 
-### Reviewed ingest (@mention + `.md`)
+### Reviewed ingest (@mention + `.md` / `.markdown` / `.txt`)
 1. Any text in your message (minus the mention itself) becomes *advice* — optional steering for the bot. A bare `@bot` drop works fine; the bot will infer intent from the draft and the channel.
 2. An LLM sees your draft, semantically-similar existing KB files, and the channel folder tree, then plans one of:
    - **`new`** — create a fresh KB entry at a content-derived path.
    - **`update`** — merge your draft into an existing file it believes is related.
-3. A second LLM call produces the final markdown. If the planner picked a poor update target, the merger can reject it mid-flight and fall back to creating a new file.
+3. A second LLM call produces the final markdown. `.txt` input is converted into markdown on the way out — the KB target is always `.md` regardless of source extension. If the planner picked a poor update target, the merger can reject it mid-flight and fall back to creating a new file.
 4. The proposal is posted in the source channel as a **unified diff** with three buttons:
    - ✅ **Apply** — write the file, commit, and re-index.
    - ❌ **Discard** — drop the proposal with no changes.
@@ -30,9 +30,9 @@ The bot branches on a single question: **did you @mention me?** That's the expli
 5. Proposals live **in memory only**. If the bot restarts before you click, the buttons expire and you'll need to drop the file again.
 
 ### Edge cases
-- **`.md` drop, no @mention** → Autoroute, even if your message has text.
-- **Non-`.md` drop + @mention** → Autoroute, because only markdown flows through the proposal editor. Your message becomes a routing hint instead.
-- **Empty `.md` drop with @mention** → Rejected with a warning — there's nothing to propose.
+- **`.md` / `.markdown` / `.txt` drop, no @mention** → Autoroute, even if your message has text.
+- **Other extension + @mention** (e.g. `.pdf`, `.docx`, images) → Autoroute, because only prose text files flow through the proposal editor. Your message becomes a routing hint instead.
+- **Empty draft with @mention** → Rejected with a warning — there's nothing to propose.
 
 ## Commands
 - `/organize` — Scan untracked files in the current channel and semantically reorganize them. Commits the result.

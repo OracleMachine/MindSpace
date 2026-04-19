@@ -203,14 +203,14 @@ class MindSpaceBot(discord.Client):
         mentioned = self.user.mentioned_in(message)
         advice = re.sub(r"<@!?\d+>", "", message.content).strip()
         for attachment in message.attachments:
-            is_md = attachment.filename.lower().endswith((".md", ".markdown"))
-            if mentioned and is_md:
+            is_proposal_draft = attachment.filename.lower().endswith((".md", ".markdown", ".txt"))
+            if mentioned and is_proposal_draft:
                 await message.channel.send(f"✍️ Reviewed ingest for `{attachment.filename}` — preparing proposal...")
                 await self._handle_file_proposal(message, attachment, advice)
             else:
                 prefix = f"📥 `{attachment.filename}` — "
                 if mentioned:
-                    await message.channel.send(f"{prefix}proposal flow is `.md`-only; routing with advice...")
+                    await message.channel.send(f"{prefix}proposal flow accepts `.md`/`.markdown`/`.txt` only; routing with advice...")
                 else:
                     await message.channel.send(f"{prefix}routing into KB by content...")
                 await self._handle_file_autoroute(message, attachment, advice=advice if mentioned else "")
