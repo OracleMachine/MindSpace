@@ -162,7 +162,7 @@ The conversation history is embedded in the system context string and the brain'
 
 ### 5.3 Thought Recording via `record_thought` Tool
 
-When the user shares a valuable insight, analysis, or conclusion, the model calls `record_thought(summary)` — an explicit tool invocation that appends the summary to `stream_of_conscious.md` via `kb.append_thought()`. The model is instructed to do this silently (no mention in its reply to the user).
+When the conversation produces a valuable insight, analysis, or conclusion (either from the user or from the bot's own synthesis in reply), the model calls `record_thought(summary)` — an explicit tool invocation that appends the summary to `stream_of_conscious.md` via `kb.append_thought()`. The bot may briefly acknowledge in prose that it noted a thought; the prompt no longer requires hard silence, since Discord already shows a tool-progress indicator and a short natural mention is helpful context. Explicit user instructions to save / integrate / file content into the KB (e.g. "save your last reply", "整合进知识库") route to `propose_update` instead — see §5.6.
 
 This replaces the previous approach of appending `THOUGHT: [summary]` as in-band text at the end of the reply and parsing it via string split. The tool-based approach is type-safe, model-version-stable, and exercises the progress UI.
 
@@ -299,9 +299,9 @@ For structured KB maintenance (updating existing `.md` files, models, or researc
 | `!sync` / `/sync` | Manually rebuild the vector index for the current channel | — |
 | URL in message | Replies instructing user to paste content manually | — |
 | File attachment (no @mention) | Content-routed ingestion: LLM picks a subfolder within the channel and renames by content, git commit | — |
-| File attachment (@mention + `.md`) | Reviewed ingest: LLM merges draft into an existing KB file or creates a new one; surfaces via the Apply/Discard/Refine proposal UI. Any extra text is optional steering advice. | — |
-| File attachment (@mention + non-`.md`) | Content-routed ingestion, but the mention text is threaded into the routing prompt as an advice hint | — |
-| Plain text | Passive dialogue: replies via tools-first KB retrieval. May silently record insights via `record_thought`, or actively trigger the Apply/Discard/Refine proposal UI via the `propose_update` tool. | — |
+| File attachment (@mention + `.md` / `.markdown` / `.txt`) | Reviewed ingest: LLM merges draft into an existing KB file or creates a new one; surfaces via the Apply/Discard/Refine proposal UI. `.txt` is converted to `.md` on write (the KB stays markdown-homogeneous). Any extra text is optional steering advice. | — |
+| File attachment (@mention + other extension) | Content-routed ingestion, but the mention text is threaded into the routing prompt as an advice hint | — |
+| Plain text | Passive dialogue: replies via tools-first KB retrieval. Records organic insights via `record_thought`. An explicit save instruction in the user's message ("save this", "整合进知识库") — or the bot's own judgment that an insight belongs in a structured file — triggers the Apply/Discard/Refine proposal UI via `propose_update`. | — |
 
 All output `.md` files are sent back to the Discord channel as Discord file attachments immediately after creation.
 

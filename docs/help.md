@@ -3,7 +3,7 @@
 **Philosophy:** Discord is the input stream; the filesystem is the source of truth. Every channel maps to a folder in the Knowledge Base, and everything you say or drop here can become durable, searchable, version-controlled content.
 
 ## How messages are processed
-- **Plain text** → Passive dialogue. The bot replies using tool-based KB retrieval, records insights silently via `record_thought`, and may proactively pop up a **reviewed proposal UI** via `propose_update` if it determines a structured file needs updating.
+- **Plain text** → Passive dialogue. The bot replies using tool-based KB retrieval and records organic insights to the running stream-of-consciousness via `record_thought`. If you explicitly ask it to save / integrate / store something into the KB ("save this", "整合进知识库", "save your last reply", etc.), or if it judges that an insight belongs in a structured file, it pops up a **reviewed proposal UI** via `propose_update` (Apply / Discard / Refine).
 - **URL** → The bot will instruct you to paste the content manually for ingestion.
 - **File drop** → Autoroute into a content-chosen subfolder, *or* a reviewed proposal when you @mention the bot on a `.md`, `.markdown`, or `.txt` file. See the next section for the full workflow.
 
