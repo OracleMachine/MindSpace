@@ -14,10 +14,13 @@ TASK:
 2. Determine the most semantically appropriate subfolder within this channel (e.g., Research/, Notes/, Articles/)
 3. Create subfolders as needed
 4. Move each file to its determined location
-5. DO NOT move or modify stream_of_conscious.md or view.md
-6. DO NOT move files that are already inside a subfolder
 
-You have full write permissions. Operate only within this directory. Make all decisions autonomously.
+CONSTRAINTS:
+- Never move or modify stream_of_conscious.md or view.md
+- Never move files that are already inside a subfolder
+- Operate only within this directory; do not reach into parent or sibling paths
+
+You have full write permissions. Make all decisions autonomously.
 
 WHEN DONE, output ONLY this markdown report (no other prose):
 ## Organize Report
@@ -33,11 +36,35 @@ WHEN DONE, output ONLY this markdown report (no other prose):
 - `<file>`: <reason>
 """
 
-CONSOLIDATE_PROMPT = """
-Synthesize these thoughts into a structured permanent article:
+CONSOLIDATE_PROMPT = """Synthesize the raw stream-of-consciousness entries below into a permanent, structured article.
 
+RAW ENTRIES:
 {content}
-"""
+
+TASK:
+- Group related thoughts by theme; drop timestamps and conversational framing.
+- Preserve concrete claims, numbers, and references verbatim where possible.
+- Elevate recurring or cross-referenced ideas into their own sections.
+- Resolve internal contradictions by noting both positions rather than silently picking one.
+- No need for external citations — source material is the stream itself.
+
+OUTPUT FORMAT (markdown, no extra prose outside this structure):
+# <Topic-derived title>
+*Consolidated from stream of consciousness.*
+
+## Executive Summary
+<3-5 sentences capturing the dominant thesis that emerged>
+
+## <Theme 1>
+<distilled content>
+
+## <Theme 2>
+<distilled content>
+
+## Open Tensions
+<any unresolved contradictions or questions surfaced by the stream>
+
+Output ONLY the markdown document — no commentary, no code fences."""
 
 RESEARCH_PROMPT = """You are performing deep research on the topic: "{topic}"
 
@@ -87,6 +114,7 @@ TASK:
 - Use web search to supplement gaps or verify recency.
 - Cite every claim: inline `[source: <channel/file> or <url>]`.
 - Highlight cross-channel connections and themes.
+- If sources from different channels or the web contradict each other, flag the discrepancy explicitly rather than silently picking one side.
 
 OUTPUT FORMAT (markdown):
 # Omni: {query}
@@ -144,8 +172,9 @@ LOCAL SOURCE MATERIAL (evidence files in this scope):
 ---
 
 TASK:
-Decide whether the current local view still holds in light of this evidence.
-- If the view is accurate and the evidence does not warrant change, output the literal sentinel `VIEW_OK` on a single line and nothing else.
+Decide whether the current local view still holds in light of this evidence. **Default to keeping the view.** Only rewrite when the evidence either directly contradicts a specific claim in the current view, or reveals a dimension the view is silent on that materially changes the stance. Stylistic phrasing differences, new supporting examples for an existing claim, or evidence that merely elaborates on a stance already held are NOT reasons to rewrite.
+
+- If the view is accurate and the evidence does not meet the bar above, output the literal sentinel `VIEW_OK` on a single line and nothing else.
 - Otherwise, rewrite the entire view.md content so the stance is consistent with the evidence. Keep it concise — it is an opinion, not a summary of the sources. Output ONLY the new markdown content (no backticks, no explanation, no trailer lines)."""
 
 DETECT_VIEW_CONFLICT_PROMPT = """You are checking consistency between two view.md files in the MindSpace view hierarchy. A view expresses the user's stance at its scope. A parent view should remain consistent with each child view and vice versa.
@@ -165,8 +194,10 @@ CHILD VIEW:
 You are being asked whether {target_label} should be updated.
 
 TASK:
-- If the two views are already consistent, output the literal sentinel `VIEW_OK` on a single line and nothing else.
-- Otherwise, rewrite the entire content of {target_label} to align with the other view, preserving its own scope and voice. Output ONLY the new markdown content (no backticks, no explanation, no trailer lines)."""
+**Default: the views are consistent.** A child view legitimately specializes on its scope and will naturally say things the parent does not — that is not a conflict. Only flag an actual conflict when both views make contradictory claims about the SAME dimension (e.g., parent says "X is primary driver", child says "X is a minor factor").
+
+- If the views are consistent (including legitimate specialization), output the literal sentinel `VIEW_OK` on a single line and nothing else.
+- Otherwise, rewrite the entire content of {target_label} to resolve the specific contradiction, preserving its own scope and voice. Do not import content from the other view that is outside {target_label}'s scope. Output ONLY the new markdown content (no backticks, no explanation, no trailer lines)."""
 
 PROPOSE_UPDATE_EXISTING_PROMPT = """Modify the following Knowledge Base file based on this instruction:
 INSTRUCTION: {instruction}
@@ -176,13 +207,24 @@ ORIGINAL FILE CONTENT:
 {existing_content}
 ---
 
-Apply the instruction surgically. Maintain existing tone and formatting.
+Apply the instruction surgically:
+- Preserve the existing heading structure, section order, and tone unless the instruction explicitly requires restructuring.
+- Touch only the sections the instruction implicates; leave unrelated content verbatim.
+- Do not re-summarize or re-title the document.
+
 Output ONLY the complete, rewritten markdown document — no commentary."""
 
 PROPOSE_UPDATE_NEW_PROMPT = """Create a new Knowledge Base file based on this instruction:
 INSTRUCTION: {instruction}
 
 The file will be saved as: {rel_path}
+
+STRUCTURE:
+- Start with a single H1 title derived from the instruction's topic (not the filename).
+- No YAML front-matter, no code fences wrapping the document.
+- Use H2/H3 sections where content warrants; otherwise plain prose is fine for short notes.
+- Match scope to instruction — do not pad short asks into long articles.
+
 Output ONLY the complete markdown document — no commentary."""
 
 ENGAGE_DIALOGUE_SYSTEM_PROMPT = """You are a knowledge agent in Discord channel #{channel_name}.{history_block}
@@ -191,7 +233,7 @@ You do NOT have any pre-loaded knowledge about this channel. All channel-specifi
 
 When the user asks a factual question, references prior discussion, or requests information about topics in this channel, ALWAYS call `search_channel_knowledge_base` first. Use `search_global_knowledge_base` for cross-channel queries. Use `list_channel_files` to see what's stored.
 
-If the user's message contains a valuable insight, analysis, or conclusion, you MUST persist it to the knowledge base. Choose the appropriate tool:
+If the conversation — whether from the user's message OR from your own synthesis in reply — contains a valuable insight, analysis, or conclusion, you MUST persist it to the knowledge base. Choose the appropriate tool:
 
 1. **`record_thought(summary)`**: Use this for general observations, interesting data points, or transitory thoughts that should be added to the channel's running log. This action is COMPLETELY SILENT and background-only. Do NOT mention it in your reply. The user will NOT be notified.
 
@@ -205,9 +247,16 @@ If the user's message contains a valuable insight, analysis, or conclusion, you 
 **THOUGHT PARTNER ROLE:**
 You are a high-level strategic advisor, not just a passive recorder. In your dialogue response, do not merely agree with the user's latest insight. Actively challenge their logic: provide a steel-manned counter-argument, suggest critical blindspots in their current model, and identify missing variables that might invalidate their hypothesis. Your value lies in providing constructive friction to deepen the research.
 
+**PERSISTENCE CHECK (mandatory final step):**
+After composing your reply, re-read it. If your reply contains a synthesis, counter-argument, new framing, or strategic claim that would be valuable to recover in a future session — and it isn't already captured verbatim in the channel view or prior stream-of-consciousness — you MUST call `record_thought(summary)` silently with a concise summary of that insight. This is not optional: the reply itself is just ephemeral Discord text; only the tool call persists it. Skipping this step when the reply contains new synthesis means the insight is lost.
+
 Reply naturally to the user."""
 
-COMMIT_MESSAGE_PROMPT = """Generate a concise, conventional-commits style Git commit message (e.g., 'feat: ...' or 'fix: ...') based on the provided context. Output ONLY the message text."""
+COMMIT_MESSAGE_PROMPT = """Generate a one-line Git commit message for a knowledge-base change (not a code change). The context below describes what files/folders were created, modified, or moved inside a Discord channel's KB folder.
+
+FORMAT: `<type>(#<channel>): <concise summary>` where type is one of add|update|organize|consolidate|research|omni|view|ingest. Keep the whole line under 72 characters. Use present tense, imperative mood.
+
+Output ONLY the message text — no body, no code fences, no trailing period."""
 
 ROUTE_FILE_PROMPT = """You are organizing a file dropped into the Discord channel #{channel_name} of a knowledge base. Pick the correct subfolder within the channel folder and a content-based filename.
 
@@ -299,6 +348,7 @@ ANALYZE_PDF_PROMPT = """This PDF has been indexed. Its document tree structure:
 
 Provide a one-sentence description of the document's content and purpose."""
 
-ANALYZE_TEXT_PROMPT = """Analyze this file content and summarize it:
+ANALYZE_TEXT_PROMPT = """Provide a 1-2 sentence description of this file's content and purpose, suitable as context for downstream reasoning. Plain prose only — no preamble, no bullet points, no "This file...".
 
+FILE CONTENT:
 {raw}"""
