@@ -353,3 +353,26 @@ ANALYZE_TEXT_PROMPT = """Provide a 1-2 sentence description of this file's conte
 
 FILE CONTENT:
 {raw}"""
+
+
+# --- Language-matching directive, auto-appended to every prompt above ---
+# Single source of truth so the wording stays consistent across the whole
+# prompt pack. The directive is applied via string concatenation at module
+# load (below) — `.format()` calls on the prompts still work because the
+# directive itself contains no format placeholders.
+_LANGUAGE_MATCH_DIRECTIVE = """
+
+**Output language:** Match the dominant language of the user's input and the surrounding content. If the majority is Chinese, output in Chinese; if primarily English, output in English. Fixed technical tokens required by this prompt — literal sentinels (e.g. `VIEW_OK`, `NEW_FILE_INSTEAD`), JSON keys, controlled-vocabulary values such as commit-type tags — are never translated."""
+
+_CONTENT_PROMPTS = (
+    "ORGANIZE_PROMPT", "CONSOLIDATE_PROMPT", "RESEARCH_PROMPT", "OMNI_PROMPT",
+    "CHANGE_VIEW_PROMPT", "DISTILL_LOCAL_VIEW_PROMPT", "DETECT_VIEW_CONFLICT_PROMPT",
+    "PROPOSE_UPDATE_EXISTING_PROMPT", "PROPOSE_UPDATE_NEW_PROMPT",
+    "ENGAGE_DIALOGUE_SYSTEM_PROMPT", "COMMIT_MESSAGE_PROMPT",
+    "ROUTE_FILE_PROMPT", "PLAN_FILE_PROPOSAL_PROMPT",
+    "MERGE_FILE_UPDATE_PROMPT", "MERGE_FILE_NEW_PROMPT",
+    "ANALYZE_PDF_PROMPT", "ANALYZE_TEXT_PROMPT",
+)
+for _name in _CONTENT_PROMPTS:
+    globals()[_name] = globals()[_name] + _LANGUAGE_MATCH_DIRECTIVE
+del _name
