@@ -23,10 +23,11 @@ The bot branches on a single question: **did you @mention me?** That's the expli
    - **`new`** — create a fresh KB entry at a content-derived path.
    - **`update`** — merge your draft into an existing file it believes is related.
 3. A second LLM call produces the final markdown. `.txt` input is converted into markdown on the way out — the KB target is always `.md` regardless of source extension. If the planner picked a poor update target, the merger can reject it mid-flight and fall back to creating a new file.
-4. The proposal is posted in the source channel as a **unified diff** with three buttons:
+4. The proposal is posted in the source channel as a short **bullet-point rationale** (up to 5 reasons justifying the change — e.g. "new evidence on X", "current view silent on Y", "contradiction with prior claim Z") followed by a **unified diff** and three buttons:
    - ✅ **Apply** — write the file, commit, and re-index.
    - ❌ **Discard** — drop the proposal with no changes.
    - ✏️ **Refine** — give the bot more instructions and regenerate against the same target.
+   The full diff is also attached as a `.diff` file in case the inline embed is awkward to read on your client.
 5. Proposals live **in memory only**. If the bot restarts before you click, the buttons expire and you'll need to drop the file again.
 
 ### Edge cases

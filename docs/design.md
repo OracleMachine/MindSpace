@@ -263,11 +263,13 @@ For structured KB maintenance (updating existing `.md` files, models, or researc
 **The Problem:** Asking the Dialogue LLM to rewrite a large KB file (e.g., a 2000-line document) within the conversation history would quickly exceed token limits and pollute the chat with redundant content.
 
 **The Solution:**
-1.  **Instruction Only:** The Dialogue LLM only provides a high-level `instruction` (e.g., "Add polling data for April") and a `rationale`. It never sees the full file content unless specifically requested.
+1.  **Instruction Only:** The Dialogue LLM only provides a high-level `instruction` (e.g., "Add polling data for April") and a `rationale` (up to 5 bullet-point reasons justifying the change). It never sees the full file content unless specifically requested.
 2.  **Stateless Delegate:** When `propose_update` is called, a separate, isolated, one-shot LLM call (the Rewrite Agent) is spawned. It reads the file, applies the instruction, and returns the *proposed* content. This content **never** enters the persistent conversation history.
 3.  **Memory-Based Staging:** The proposed content is stored in a `pending_proposals` dictionary in memory. The disk is **never touched** at this stage.
-4.  **Human-in-the-loop (Git Diff):** The bot renders a color-coded Git-style diff in Discord (using `difflib`) for user review.
+4.  **Human-in-the-loop (Git Diff):** The bot renders a color-coded Git-style diff in Discord (using `difflib`) for user review. The rationale bullets appear as a blockquote above the diff so the reviewer sees *why* before reading *what*.
 5.  **Commit on Approval:** The file is only written to disk and committed to Git (`kb.save_state`) once the user clicks **Apply**. Clicking **Discard** clears the memory, and **Refine** triggers another stateless rewrite based on feedback.
+
+**Rationale enrichment.** Non-tool proposal paths (view-tree challenger, upward/downward consistency checks, `/change_my_view`) emit a short trigger string as their rationale — "Local view drift detected in `X`." or similar. `MindSpaceBot._enrich_rationale` runs inside `_send_proposal` and transparently upgrades any bullet-free rationale into a bold trigger header + bullet list via `JUSTIFY_PROPOSAL_PROMPT`. Rationales that already contain bullet lines (tool-initiated `propose_update`, file-drop planner) pass through unchanged — no double-enrichment.
 
 **Invariant:** Staged proposals are volatile (cleared on bot restart) and isolated (do not affect `git status` or semantic indexing until applied). This prevents "dirty" unapproved edits from being swept up by background tasks like `!organize`.
 
