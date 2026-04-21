@@ -374,10 +374,42 @@ class MindSpaceBot(discord.Client):
         }
         return proposal_id
 
+    async def _enrich_rationale(self, proposal: dict) -> str:
+        """Augment a proposal's rationale with bullet-point justification via
+        `JUSTIFY_PROPOSAL_PROMPT`. Centralized here so every proposal path —
+        view-tree challenger, consistency checks, `/change_my_view`,
+        `propose_update` tool, file-drop merges — picks it up automatically
+        without each caller having to do its own pre-await.
+
+        Skips when the rationale already looks bulleted (tool-initiated
+        `propose_update` and file-drop `PLAN_FILE_PROPOSAL_PROMPT` produce
+        bullets directly; re-enriching would duplicate them). Falls back to
+        the bare trigger on LLM failure or the `MINOR` sentinel, so the
+        proposal stays legible in any path."""
+        rationale = proposal.get("rationale") or ""
+        if any(ln.lstrip().startswith("- ") for ln in rationale.splitlines()):
+            return rationale
+        from mindspace.agent import prompts
+        prompt = prompts.JUSTIFY_PROPOSAL_PROMPT.format(
+            rel_path=proposal["rel_path"],
+            trigger=rationale,
+            existing=proposal.get("existing_content") or "(empty — new file)",
+            proposed=proposal.get("proposed_content") or "(empty)",
+        )
+        try:
+            out = (await self.agent.brain.run_command_async(prompt) or "").strip()
+        except Exception as e:
+            logger.warning(f"_enrich_rationale: LLM failure for {proposal['rel_path']}: {e}")
+            return rationale
+        if not out or out == "MINOR":
+            return rationale
+        return f"**{rationale}**\n{out}"
+
     async def _send_proposal(self, channel, proposal_id: str, interaction: discord.Interaction = None):
         proposal = self._pending_proposals.get(proposal_id)
         if not proposal:
             return
+        proposal["rationale"] = await self._enrich_rationale(proposal)
         diff_text = _render_diff(
             proposal["existing_content"],
             proposal["proposed_content"],

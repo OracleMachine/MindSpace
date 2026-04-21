@@ -199,6 +199,30 @@ TASK:
 - If the views are consistent (including legitimate specialization), output the literal sentinel `VIEW_OK` on a single line and nothing else.
 - Otherwise, rewrite the entire content of {target_label} to resolve the specific contradiction, preserving its own scope and voice. Do not import content from the other view that is outside {target_label}'s scope. Output ONLY the new markdown content (no backticks, no explanation, no trailer lines)."""
 
+JUSTIFY_PROPOSAL_PROMPT = """Explain why a proposed knowledge-base change is warranted.
+
+FILE: {rel_path}
+TRIGGER: {trigger}
+
+CURRENT CONTENT:
+---
+{existing}
+---
+
+PROPOSED CONTENT:
+---
+{proposed}
+---
+
+TASK:
+Produce up to 5 short bullet points that justify the change (fewer is fine — 1 or 2 is plenty when the change is narrow). Each bullet should name one concrete reason — new evidence, contradiction with a prior claim, a missing dimension the current content is silent on, a factual correction, a refinement of framing, etc. Focus on what is DIFFERENT and WHY that difference matters.
+
+OUTPUT (exactly this shape, nothing else):
+- <reason 1>
+- <reason 2>
+
+If the change is substantively trivial (wording polish, whitespace, typo fixes — no shift in claim or scope), output the single line `MINOR` and nothing else."""
+
 PROPOSE_UPDATE_EXISTING_PROMPT = """Modify the following Knowledge Base file based on this instruction:
 INSTRUCTION: {instruction}
 
@@ -302,7 +326,7 @@ RULES:
 - Pick mode='update' ONLY if there is a clearly-matching existing file whose topic overlaps the draft and where merging makes editorial sense.
 - Otherwise pick mode='new'.
 - target_rel_path is relative to the channel folder, must end in .md, and for 'new' should follow TYPE-DATE-SUBJECT kebab-case (e.g. NOTE-2026-04-14-topic.md) placed in an appropriate subfolder from the layout (or channel root if none fit).
-- rationale is one short sentence, shown to the user.
+- rationale is a newline-separated list of up to 5 bullet points (each prefixed with `- `) justifying this routing choice and any merge. Cite concrete reasons — topic overlap with the target file, content novelty, scope fit, etc. Shown to the user in the proposal UI.
 
 Respond with STRICT JSON only — no prose, no code fences:
 {{"mode": "new|update", "target_rel_path": "...", "rationale": "..."}}"""
@@ -367,6 +391,7 @@ _LANGUAGE_MATCH_DIRECTIVE = """
 _CONTENT_PROMPTS = (
     "ORGANIZE_PROMPT", "CONSOLIDATE_PROMPT", "RESEARCH_PROMPT", "OMNI_PROMPT",
     "CHANGE_VIEW_PROMPT", "DISTILL_LOCAL_VIEW_PROMPT", "DETECT_VIEW_CONFLICT_PROMPT",
+    "JUSTIFY_PROPOSAL_PROMPT",
     "PROPOSE_UPDATE_EXISTING_PROMPT", "PROPOSE_UPDATE_NEW_PROMPT",
     "ENGAGE_DIALOGUE_SYSTEM_PROMPT", "COMMIT_MESSAGE_PROMPT",
     "ROUTE_FILE_PROMPT", "PLAN_FILE_PROPOSAL_PROMPT",

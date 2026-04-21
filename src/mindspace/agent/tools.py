@@ -187,7 +187,12 @@ class MindSpaceTools:
             Args:
                 path: The relative path to the file under the channel folder (e.g., 'Analyses/model.md')
                 instruction: Clear, imperative instructions for the change (e.g., 'Add a section about X after Y').
-                rationale: Why this change is being proposed (visible to the human reviewer).
+                rationale: up to 5 short bullet points (newline-separated, each starting with `- `;
+                  fewer is fine — 1 or 2 is plenty when the change is narrow) that justify why
+                  this change is necessary. Each bullet should cite a concrete reason — new
+                  evidence, contradiction with existing content, missing dimension, factual
+                  correction, refinement of framing, etc. This is shown to the human reviewer in
+                  the proposal UI, so make it specific, not a restatement of the instruction.
             """
             logger.debug(f"Tool Execution: propose_update for #{channel_name} path={path}: {rationale}")
             if not on_propose_update:

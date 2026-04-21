@@ -17,6 +17,14 @@ def _render_diff(existing: str, proposed: str, file_path: str) -> str:
 _DIFF_EMBED_LIMIT = 4000  # headroom under Discord's 4096-char embed description cap
 
 
+def _as_blockquote(text: str) -> str:
+    """Prefix every line of `text` with `> ` so multi-line rationales (e.g.
+    bullet-point justifications) render as a single continuous Discord
+    blockquote. A single-line rationale returns a single `> <line>` unchanged."""
+    lines = text.splitlines() or [text]
+    return "\n".join(f"> {ln}" if ln else ">" for ln in lines)
+
+
 def _format_proposal_message(rel_path: str, rationale: str, diff_text: str):
     """Build a proposal message payload.
 
@@ -28,7 +36,7 @@ def _format_proposal_message(rel_path: str, rationale: str, diff_text: str):
     """
     content = (
         f"\U0001f4a1 **KB Update Proposal for `{rel_path}`**\n"
-        f"> {rationale}"
+        f"{_as_blockquote(rationale)}"
     )
 
     fence_overhead = len("```diff\n\n```")
