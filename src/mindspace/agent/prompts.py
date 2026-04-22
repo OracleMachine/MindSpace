@@ -379,11 +379,22 @@ FILE CONTENT:
 {raw}"""
 
 
-# --- Language-matching directive, auto-appended to every prompt above ---
+# --- Global directives, auto-spliced into every prompt above ---
 # Single source of truth so the wording stays consistent across the whole
-# prompt pack. The directive is applied via string concatenation at module
-# load (below) — `.format()` calls on the prompts still work because the
-# directive itself contains no format placeholders.
+# prompt pack. `.format()` calls on the prompts still work because the
+# directives themselves contain no format placeholders.
+#
+# Placement intent:
+# - _WRITING_STYLE_DIRECTIVE is PREPENDED — it is a constitutional rule
+#   governing *how* natural-language output reads, and should frame the
+#   model's reasoning before it sees the task.
+# - _LANGUAGE_MATCH_DIRECTIVE is APPENDED — it is the final word on
+#   output language/encoding, applied as a trailing constraint so it
+#   overrides any earlier defaults the task prompt might have baked in.
+_WRITING_STYLE_DIRECTIVE = """**Writing style (constitution):** Use simple, direct language. Prefer short sentences over long complex ones. Choose precise words over vague or padded phrasing. Cut filler. This style rule governs natural-language output only — it does not override required structured formats (JSON, literal sentinels like `VIEW_OK`, commit-type tags, controlled vocabularies).
+
+"""
+
 _LANGUAGE_MATCH_DIRECTIVE = """
 
 **Output language:** Match the dominant language of the user's input and the surrounding content. If the majority is Chinese, output in Chinese; if primarily English, output in English. Fixed technical tokens required by this prompt — literal sentinels (e.g. `VIEW_OK`, `NEW_FILE_INSTEAD`), JSON keys, controlled-vocabulary values such as commit-type tags — are never translated."""
@@ -399,5 +410,5 @@ _CONTENT_PROMPTS = (
     "ANALYZE_PDF_PROMPT", "ANALYZE_TEXT_PROMPT",
 )
 for _name in _CONTENT_PROMPTS:
-    globals()[_name] = globals()[_name] + _LANGUAGE_MATCH_DIRECTIVE
+    globals()[_name] = _WRITING_STYLE_DIRECTIVE + globals()[_name] + _LANGUAGE_MATCH_DIRECTIVE
 del _name
