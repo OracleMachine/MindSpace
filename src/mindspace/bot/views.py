@@ -75,6 +75,16 @@ class ProposalView(discord.ui.View):
     async def apply(self, interaction: discord.Interaction, button: discord.ui.Button):
         import os
         await interaction.response.defer()
+        # Close the feedback gap between defer() and the final edit: the work
+        # below (commit-message LLM, git commit, full challenger cascade) can
+        # run for tens of seconds, during which the button would otherwise sit
+        # on a bare spinner. Swap the card to a processing state immediately.
+        await interaction.edit_original_response(
+            content="⏳ **Applying proposal...**",
+            embed=None,
+            attachments=[],
+            view=None,
+        )
         proposal = self.bot._pending_proposals.pop(self.proposal_id, None)
         if not proposal:
             await interaction.edit_original_response(content="⚠️ Proposal expired or not found.", view=None)
