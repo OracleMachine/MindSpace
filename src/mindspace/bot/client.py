@@ -291,6 +291,12 @@ class MindSpaceBot(discord.Client):
             logger.error(f"Failed to sync slash commands: {e}")
 
         logger.info(f'Logged in as {self.user} (ID: {self.user.id})')
+        # Freeze the bot's Discord-derived identity onto the agent so the
+        # dialogue prompt's {agent_name} matches the author label Discord
+        # stamps on this bot's messages in channel history. Set once, never
+        # reassigned for the life of the process.
+        self.agent.agent_name = self.user.display_name
+        logger.info(f'Agent identity set: {self.agent.agent_name!r}')
         logger.info('------')
 
         logger.info("Startup: ensuring reserved channels...")

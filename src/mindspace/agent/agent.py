@@ -16,6 +16,14 @@ class MindSpaceAgent:
         logger.info(f"🖥️  MindSpaceAgent: Command brain → Gemini CLI (YOLO mode, model={config.Brains.GEMINI_CLI_MODEL or 'default'})")
         self.cli_brain = GeminiCLIBrain()
         self.kb = None
+        # Bot display name, assigned at Discord login:
+        #   MindSpaceBot.on_ready writes `self.agent.agent_name = self.user.display_name`
+        # once, right after the gateway handshake, and never reassigns it.
+        # engage_dialogue reads it on every turn.
+        # Stays empty until that write lands; if an empty string ever reaches
+        # the rendered prompt ("You are  — a knowledge agent..."), on_ready
+        # didn't run — treat that as a bug signal, not a fallback.
+        self.agent_name: str = ""
 
     def set_kb(self, kb):
         self.kb = kb
@@ -61,7 +69,11 @@ class MindSpaceAgent:
 
     async def engage_dialogue(self, user_message, channel_name, history: str = "", tools: list = None, mcp_sessions: list = None):
         history_block = f"\n\n--- Recent Conversation History ---\n(Messages labeled '(AI)' are from you. All other names are human users.)\n\n{history}" if history else ""
-        system_ctx = prompts.ENGAGE_DIALOGUE_SYSTEM_PROMPT.format(channel_name=channel_name, history_block=history_block)
+        system_ctx = prompts.ENGAGE_DIALOGUE_SYSTEM_PROMPT.format(
+            channel_name=channel_name,
+            history_block=history_block,
+            agent_name=self.agent_name,
+        )
         injected_ctx = self._inject_view(system_ctx, channel_name)
         response = await self.brain.achat(injected_ctx, [], user_message, tools=tools, mcp_sessions=mcp_sessions)
         return response.strip()

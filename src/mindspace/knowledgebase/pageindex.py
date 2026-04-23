@@ -26,7 +26,7 @@ class PageIndexManager:
     """
 
     def __init__(self):
-        self.client = PageIndexClient(api_key=config.Auth.PAGEINDEX_API_KEY)
+        self.client = PageIndexClient(api_key=config.Credentials.PAGEINDEX_API_KEY)
         self._index = self._load_index()   # {"folders": {channel: id}, "documents": {path: doc_id}}
 
     # --- Persistence ---

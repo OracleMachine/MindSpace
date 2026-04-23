@@ -88,7 +88,7 @@ graph TD
 | `tools.py` | `MindSpaceTools`: closure-bound tool functions exposed to the LLM during passive dialogue (list files, search channel KB, search global KB, read hierarchical view chain, record thought, propose update). |
 | `viking.py` | `VikingContextManager`: OpenViking wrapper; channel-scoped and global semantic search modes |
 | `pageindex_manager.py` | `PageIndexManager`: PageIndex cloud API wrapper; PDF upload, async processing, channel-scoped deep Q&A |
-| `mcp_bridge.py` | MCP (Model Context Protocol) integration. Handles two-pronged sync: rendering `config.yaml` servers into Gemini CLI's `settings.json` for active commands, and managing an `MCPSessionPool` for native SDK tool use in passive dialogue. |
+| `mcp_bridge.py` | MCP (Model Context Protocol) integration. Handles two-pronged sync: rendering the active profile's `mcp.servers` into Gemini CLI's `settings.json` for active commands, and managing an `MCPSessionPool` for native SDK tool use in passive dialogue. |
 | `config.py` | Centralized configuration for paths, models, brain type, history char limit, ignored extensions, and MCP server definitions. |
 | `logger.py` | Dual-output logger: console (all levels) + Discord `#system-log` (INFO and above, guild-scoped) |
 
@@ -388,11 +388,11 @@ The bot's `git_commit()` deliberately stages **only** paths under `Channels/` (`
 
 ## 11. MCP Integration (Model Context Protocol)
 
-MindSpace integrates MCP servers defined in `config.yaml` using a dual-path strategy to ensure consistent tool availability across both dialogue and active commands.
+MindSpace integrates MCP servers defined in the active profile (`profiles/<name>.yaml`, picked by `$MINDSPACE_PROFILE`; default `default`) using a dual-path strategy to ensure consistent tool availability across both dialogue and active commands.
 
 ### 11.1 Active Commands (Gemini CLI)
 
-When the bot starts, `mcp_bridge.sync_cli_settings()` reads the `mcp.servers` dictionary from `config.yaml` and renders it into the Gemini CLI's isolated `settings.json` (located at `<BASE_STORAGE_PATH>/bot-home/.gemini/settings.json`).
+When the bot starts, `mcp_bridge.sync_cli_settings()` reads the `mcp.servers` dictionary from the active profile and renders it into the Gemini CLI's isolated `settings.json` (located at `<BASE_STORAGE_PATH>/bot-home/.gemini/settings.json`).
 
 - This makes all MCP tools (e.g., Wisburg, Google Search) available to `!organize`, `!research`, and `!omni` via the CLI's native agentic loop.
 - Servers are added to the `mcpServers` key in the CLI config.
@@ -407,7 +407,7 @@ For the "passive" chat brain (`GoogleGenAIBrain`), the bot maintains a live `MCP
 
 ### 11.3 Configuration
 
-MCP servers are configured in `config.yaml` under the `mcp.servers` key, supporting environment variable expansion (e.g., `${WISBURG_MCP_TOKEN}`):
+MCP servers are configured in the active profile under the `mcp.servers` key, supporting environment variable expansion (e.g., `${WISBURG_MCP_TOKEN}`):
 
 ```yaml
 mcp:

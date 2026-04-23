@@ -8,17 +8,23 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Running the Bot
 
+One agent per profile, one process per agent:
+
 ```bash
-cd Agent
-python3 bot.py
+python run.py <profile>     # profile name, e.g. `default` → profiles/default.yaml
+python run.py work.yaml     # filename also accepted
+python run.py ./profiles/team-b.yaml   # explicit path also accepted
 ```
 
-Required environment variables (export in `~/.zshrc`):
-```bash
-export DISCORD_TOKEN="your_discord_bot_token"
-export GEMINI_API_KEY="your_gemini_api_key"
-export PAGEINDEX_API_KEY="your_pageindex_api_key"
-```
+Each profile YAML is a self-contained bot config (`credentials:`, model
+settings, MCP servers — everything). All profiles are gitignored (`profiles/*.yaml`):
+the repo ships agent code, not configuration. No profile is tracked, so
+there's no template-drift risk; the schema is documented in `QUICKSTART.md`.
+
+The bot's display name is read from Discord at runtime (`self.user.display_name`)
+and threaded into the dialogue system prompt, so the LLM's self-description
+is always whatever the Discord application is named — no separate `agent.name`
+field to keep in sync.
 
 ## Architecture
 
@@ -51,12 +57,12 @@ Thought/
 - **`tools.py`** — `MindSpaceTools`: closure-bound tool functions exposed to the LLM during passive dialogue (`list_channel_files`, `search_channel_knowledge_base`, `search_global_knowledge_base`, `list_global_files`, `get_view_chain`, `record_thought`, `propose_update`). `propose_update` refuses any path whose basename is `view.md` at any depth — view edits only flow through the challenger / `/change_my_view`.
 - **`manager.py`** — `KnowledgeBaseManager`: All filesystem and Git operations. Creates per-server repos, manages channel folders, appends thoughts, and performs `git commit` after every active command. `save_state` returns `{touched, sha}` so the bot can drive the view-tree challenger. Hierarchical view helpers: `read_view`, `write_view`, `get_view_chain`, `list_subfolders_with_content`, `read_folder_context`.
 - **`mcp_bridge.py`** — MCP integration. `sync_cli_settings()` renders MCP servers into Gemini CLI's settings.json. `MCPSessionPool` manages live `ClientSession`s for the dialogue brain via AFC.
-- **`config.py`** — Thin YAML loader (`config.yaml` at repo root). Exposes all settings as module-level constants. Secrets stay in env vars.
+- **`config.py`** — Thin YAML loader. Reads `profiles/<name>.yaml` at repo root, where `<name>` is `$MINDSPACE_PROFILE` (defaults to `default`). `$MINDSPACE_CONFIG` overrides the path outright. Exposes all settings as module-level constants. Secrets are inline in the profile under `credentials:` (no env-var fallback).
 - **`logger.py`** — `MindSpaceLogger`: Triple-output logger (console + file + Discord `#system-log` channel), each with independent configurable levels.
 
 ### Design Principles
 
-- **Tool-first architecture**: all structured bot behaviors (KB retrieval, thought recording, side-effects) are expressed as typed tool calls, not in-band prompt conventions. See `Agent/design.md` section 5.0 for rationale.
+- **Tool-first architecture**: all structured bot behaviors (KB retrieval, thought recording, side-effects) are expressed as typed tool calls, not in-band prompt conventions. See `docs/design.md` section 5.0 for rationale.
 - **Tools-first dialogue**: the dialogue brain receives NO pre-loaded KB context (beyond the view chain). The model must call `search_channel_knowledge_base` to retrieve data. This keeps prompts lean and ensures tool progress UI is exercised.
 - **View hierarchy**: every folder under a channel may hold its own `view.md` (stance/opinion/conclusion at that scope). The channel-root view rolls up the subtree. Governing rule: **users can only initiate master-view updates** (via `/change_my_view`); subfolder view updates are LLM-initiated only (via the challenger / consistency checks). But every view change — master or subfolder — still requires user approval through the proposal UI. An event-driven challenger wired into `save_state` re-distills the touched folder's view after each content commit AND walks upward to check every ancestor — new information always propagates up. `/change_my_view` additionally fires the downward cascade. See `docs/design.md` §5.6.
 - **Agent Skills pattern deferred**: Evaluated Anthropic's [Agent Skills](https://www.anthropic.com/engineering/equipping-agents-for-the-real-world-with-agent-skills) (SKILL.md folders with YAML frontmatter, progressive disclosure) and deferred adoption. Rationale: narrow, stable command surface (~5 commands + 7 tools) for a single user, prompts already centralized in `prompts.py`, and MCP already handles dynamic external-tool discovery — the progressive-disclosure tax doesn't pay off. Revisit when `prompts.py` becomes unwieldy (~800+ lines) or a command needs bundled reference material large enough that the LLM should `read` it on demand rather than inline it.
@@ -81,9 +87,21 @@ For a full list of commands (`!organize`, `!research`, `!change_my_view`, etc.) 
 
 ## Configuration
 
-All non-secret config lives in `config.yaml` at the repo root. Secrets stay in env vars.
+Each agent has its own `profiles/<name>.yaml` at the repo root. The profile is a standalone config — `credentials:` (Discord + Gemini + PageIndex keys inline), `log:`, `storage:`, `brains:`, `conversation:`, `mcp:` — everything one agent needs, with no shared global state between agents.
+
+Profile resolution order inside `config.py`:
+1. `$MINDSPACE_CONFIG` — absolute path (what `run.py` sets).
+2. `$MINDSPACE_PROFILE` — profile name → `profiles/<name>.yaml`.
+3. Fallback → `profiles/default.yaml` (none tracked in git — `run.py` always sets #1, so this only fires for bare `python -m mindspace.main` invocations and errors out if the user hasn't created the file).
+
+Bot identity (the value spliced into `ENGAGE_DIALOGUE_SYSTEM_PROMPT` as `{agent_name}`) comes from `self.user.display_name` after the bot logs in to Discord — the same value Discord already stamps on the bot's messages in channel history. Keeping the prompt's self-reference and the history author label identical avoids confusing the LLM when it reads prior turns.
 
 ```yaml
+credentials:
+  discord_token: "..."        # required — bot token for this agent
+  gemini_api_key: "..."       # required
+  pageindex_api_key: "..."    # required
+
 log:
   stream_level: DEBUG       # console — DEBUG | INFO | WARNING | ERROR
   file_level: DEBUG         # file — rotates daily, keeps 3 days
@@ -95,6 +113,7 @@ storage:
 
 brains:
   dialogue_type: GoogleGenAISdk
+  enable_google_search: true
   command_type: gemini-cli
   gemini_sdk_model: gemini-3.1-flash-lite-preview
   gemini_cli_model: auto-gemini-3
@@ -114,7 +133,7 @@ For step-by-step setup instructions, please see `QUICKSTART.md`.
 ### How MCP flows through the system
 
 ```
-config.yaml                    
+profiles/<active>.yaml
   mcp.servers: {name: {url, headers}}
        │
        ├──> config.py: MCP_SERVERS (env vars expanded)

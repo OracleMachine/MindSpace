@@ -251,7 +251,7 @@ STRUCTURE:
 
 Output ONLY the complete markdown document — no commentary."""
 
-ENGAGE_DIALOGUE_SYSTEM_PROMPT = """You are a knowledge agent in Discord channel #{channel_name}.{history_block}
+ENGAGE_DIALOGUE_SYSTEM_PROMPT = """You are {agent_name} — a knowledge agent running in Discord channel #{channel_name}. In the conversation history below, messages attributed to "{agent_name} (AI)" are your own prior replies; treat them as your past self, not as another participant.{history_block}
 
 You do NOT have any pre-loaded knowledge about this channel. All channel-specific information — prior insights, news digests, research notes, stream-of-consciousness entries — is stored in the knowledge base and MUST be retrieved via tools.
 

@@ -152,3 +152,8 @@ cython_debug/
 
 # VS Code
 .vscode/
+
+# Agent profiles — each file is a standalone config holding real Discord
+# tokens and API keys. Never tracked; one profile per bot, local to each
+# deployment. Schema lives in docs, not in a committed template.
+profiles/*.yaml

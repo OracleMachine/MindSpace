@@ -38,7 +38,7 @@ class LLMBrain(ABC):
 class GoogleGenAIBrain(LLMBrain):
     def __init__(self, model=config.Brains.GEMINI_SDK_MODEL):
         self.model = model
-        self.client = genai.Client(api_key=config.Auth.GEMINI_API_KEY)
+        self.client = genai.Client(api_key=config.Credentials.GEMINI_API_KEY)
 
     def close(self):
         self.client.close()

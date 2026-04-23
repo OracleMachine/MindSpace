@@ -31,16 +31,21 @@ Ensure you have the following installed and configured on your machine:
 
 ## 3. Local Configuration
 
-### Step 3.1: Environment Variables
-Add these to your `~/.zshrc` (or create a `.env` file in the project root):
-```bash
-export DISCORD_TOKEN="your_discord_bot_token"
-export GEMINI_API_KEY="your_gemini_api_key"
-export PAGEINDEX_API_KEY="your_pageindex_api_key"
+### Step 3.1: Create your profile
+Every profile is self-contained: tokens, model settings, MCP servers — all inline. One profile per bot. All `profiles/*.yaml` are gitignored, so real tokens never get committed.
+
+Create `profiles/my-agent.yaml` with at least the `credentials:` block:
+```yaml
+credentials:
+  discord_token: "your_discord_bot_token"    # unique per agent
+  gemini_api_key: "your_gemini_api_key"
+  pageindex_api_key: "your_pageindex_api_key"
 ```
 
-### Step 3.2: `config.yaml`
-All non-secret config lives in `config.yaml` at the repo root:
+There is **no** `agent.name` field. The bot's display name comes straight from Discord (`self.user.display_name` after login) and is injected into the dialogue prompt, so whatever you named the bot in the Discord Developer Portal is what the LLM calls itself — and it matches the author label Discord puts on the bot's own messages in channel history.
+
+### Step 3.2: Profile config reference
+The rest of the profile controls logging, storage, brains, and MCP. Full template:
 ```yaml
 log:
   stream_level: DEBUG       # console — DEBUG | INFO | WARNING | ERROR
@@ -81,11 +86,14 @@ The bot expects `ov.conf` inside your `storage.base_path` (e.g. `Thought/ov.conf
 ## 4. Running the Agent
 
 ```bash
-cd Agent
-python3 bot.py
+python run.py my-agent       # loads profiles/my-agent.yaml
+python run.py my-agent.yaml  # filename form also works
+python run.py ./profiles/my-agent.yaml  # explicit path also works
 ```
 
-The bot runs a preflight check (PageIndex, OpenViking, GitPython, API keys) before connecting to Discord. If anything is missing it will tell you.
+One process per agent. To run multiple bots concurrently, open multiple shells (or use your process manager of choice) and launch each with its own profile.
+
+The launcher runs a preflight check (PageIndex, OpenViking, GitPython, credentials) before connecting to Discord. If anything is missing it will tell you.
 
 ## 5. Usage & Commands
 
@@ -114,7 +122,7 @@ The bot supports both **Slash Commands** (`/command`) and **Prefix Commands** (`
 
 MCP (Model Context Protocol) extends the bot with external tool capabilities — web search, database queries, document reasoning, etc. Both brains consume configured MCP servers automatically.
 
-### Step 6.1: Add servers to `config.yaml`
+### Step 6.1: Add servers to the active profile (`profiles/<name>.yaml`)
 
 ```yaml
 mcp:
@@ -173,7 +181,7 @@ Preflight: MCP -- 2/2 servers reachable
 ### How MCP flows through the system
 
 ```
-config.yaml
+profiles/<active>.yaml
   mcp.servers: {name: {url, headers}}
        |
        +---> config.py: MCP_SERVERS (env vars expanded)

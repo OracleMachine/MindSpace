@@ -8,9 +8,17 @@ try:
 except ImportError:
     pass
 
+# Config resolution order (first hit wins):
+#   1. MINDSPACE_CONFIG — absolute path, wins unconditionally (escape hatch for
+#      tests / one-off overrides).
+#   2. MINDSPACE_PROFILE — profile name; loads profiles/<name>.yaml at repo root.
+#   3. profiles/default.yaml — the committed default profile.
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+_PROFILES_DIR = os.path.join(_REPO_ROOT, "profiles")
+_PROFILE = os.environ.get("MINDSPACE_PROFILE", "default")
 _CONFIG_PATH = os.environ.get(
     "MINDSPACE_CONFIG",
-    os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))), "config.yaml"),
+    os.path.join(_PROFILES_DIR, f"{_PROFILE}.yaml"),
 )
 
 with open(_CONFIG_PATH, "r") as f:
@@ -38,10 +46,17 @@ class Log:
     DISCORD_LEVEL = os.getenv("LOG_DISCORD_LEVEL", _log.get("discord_level", "INFO")).upper()
     FILE_PATH = os.path.expanduser(_log.get("file_path", "~/logs/MindSpace/mindspace.log"))
 
-class Auth:
-    DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
-    GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-    PAGEINDEX_API_KEY = os.getenv("PAGEINDEX_API_KEY")
+class Credentials:
+    # Each profile is self-contained: credentials live inline under `credentials:`.
+    # No env-var fallback — a profile that omits a token is an error, not a
+    # "use the ambient shell's token instead" situation. This avoids the
+    # footgun where a misconfigured profile silently inherits the previous
+    # agent's credentials.
+    _creds = _cfg.get("credentials", {})
+    DISCORD_TOKEN = _creds.get("discord_token")
+    GEMINI_API_KEY = _creds.get("gemini_api_key")
+    PAGEINDEX_API_KEY = _creds.get("pageindex_api_key")
+
 
 class Storage:
     _storage = _cfg.get("storage", {})
@@ -56,15 +71,15 @@ class Brains:
     
     ENABLE_GOOGLE_SEARCH = _brains.get("enable_google_search")
     if ENABLE_GOOGLE_SEARCH is None:
-        raise ValueError("Configuration error: 'brains.enable_google_search' must be explicitly set to true or false in config.yaml.")
+        raise ValueError(f"Configuration error: 'brains.enable_google_search' must be explicitly set to true or false in {_CONFIG_PATH}.")
         
     GEMINI_SDK_MODEL = _brains.get("gemini_sdk_model")
     if GEMINI_SDK_MODEL is None:
-        raise ValueError("Configuration error: 'brains.gemini_sdk_model' must be explicitly set in config.yaml.")
+        raise ValueError(f"Configuration error: 'brains.gemini_sdk_model' must be explicitly set in {_CONFIG_PATH}.")
         
     GEMINI_CLI_MODEL = _brains.get("gemini_cli_model")
     if GEMINI_CLI_MODEL is None:
-        raise ValueError("Configuration error: 'brains.gemini_cli_model' must be explicitly set in config.yaml (e.g., 'auto-gemini-3').")
+        raise ValueError(f"Configuration error: 'brains.gemini_cli_model' must be explicitly set in {_CONFIG_PATH} (e.g., 'auto-gemini-3').")
 
 class Conversation:
     _conv = _cfg.get("conversation", {})

@@ -17,7 +17,7 @@ def _preflight_check():
 
     try:
         logger.info("Preflight: validating PageIndex API key...")
-        pi_client = PageIndexClient(api_key=config.Auth.PAGEINDEX_API_KEY)
+        pi_client = PageIndexClient(api_key=config.Credentials.PAGEINDEX_API_KEY)
         pi_client.list_documents(limit=1)
 
         logger.info("Preflight: validating OpenViking...")
@@ -60,16 +60,22 @@ def _startup_indexing():
     logger.info("Startup Indexing: complete.")
 
 def main():
-    logger.info("========== Launching MindSpace ==========")
-    
+    logger.info("========== Launching MindSpace agent ==========")
+    logger.info(f"Profile: {config._CONFIG_PATH}")
+    # Actual Discord identity ('Logged in as ...') is reported in on_ready
+    # once the bot connects — before login there is no authoritative name.
+
     required = {
-        "DISCORD_TOKEN": config.Auth.DISCORD_TOKEN,
-        "GEMINI_API_KEY": config.Auth.GEMINI_API_KEY,
-        "PAGEINDEX_API_KEY": config.Auth.PAGEINDEX_API_KEY,
+        "credentials.discord_token": config.Credentials.DISCORD_TOKEN,
+        "credentials.gemini_api_key": config.Credentials.GEMINI_API_KEY,
+        "credentials.pageindex_api_key": config.Credentials.PAGEINDEX_API_KEY,
     }
     missing = [k for k, v in required.items() if not v]
     if missing:
-        logger.error(f"Missing required environment variables: {', '.join(missing)}")
+        logger.error(
+            f"Missing required credentials in {config._CONFIG_PATH}: {', '.join(missing)}. "
+            "Each profile is self-contained — fill these in under the `credentials:` block."
+        )
         return
 
     try:
@@ -82,7 +88,7 @@ def main():
     intents = discord.Intents.default()
     intents.message_content = True
     bot = MindSpaceBot(intents=intents)
-    bot.run(config.Auth.DISCORD_TOKEN)
+    bot.run(config.Credentials.DISCORD_TOKEN)
 
 if __name__ == "__main__":
     main()
