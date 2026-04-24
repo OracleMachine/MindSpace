@@ -105,6 +105,12 @@ While the cascade runs you'll see a single 🧭 status message in the channel th
 
 ---
 
-## Silent channels
+## Silent channels (output-only)
 
-`#console` is bot-managed — all logger output and `/help` replies land there. `#general` is not bot-managed, but I stay silent in it by convention (Discord auto-creates `#general` as a lobby; I don't interject). Messages in either channel get no reply.
+Three channels are **output-only**: I can post into them, but anything you type is ignored — no dialogue, no ingest, no commands.
+
+- `#console` — bot-managed. All logger output and `/help` replies land here.
+- `#general` — Discord auto-creates it on every server; I stay out by convention so the lobby stays a human space.
+- `#notification` — legacy from an earlier version. No longer auto-created, but silenced here so I don't accidentally engage on servers that still have the channel from a prior deployment.
+
+If you want to chat with me, use any other channel.

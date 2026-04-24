@@ -39,11 +39,22 @@ class MindSpaceBot(discord.Client):
         "console": "🖥️ **MindSpace Console Initialized.**",
     }
 
-    # Channels where the bot does NOT respond to messages. Includes every
-    # reserved channel (the bot should not talk back to its own log/system
-    # channels) plus `#general` — Discord auto-creates `#general` on every
-    # server and users treat it as a low-friction lobby; the bot stays out.
-    SILENT_CHANNELS = set(RESERVED_CHANNELS) | {"general"}
+    # Channels where the bot does NOT respond to messages — `on_message`
+    # short-circuits before the handler chain runs, so dialogue, ingest, and
+    # active commands are all skipped. Output-only: the bot can post into
+    # these channels (logger writes to `#console`, `/help` posts there) but
+    # anything a user types in them is ignored.
+    #
+    # Includes:
+    #   - every `RESERVED_CHANNELS` entry (`#console`) — the bot should not
+    #     talk back to its own log channel.
+    #   - `#general` — Discord auto-creates it on every server and users
+    #     treat it as a low-friction lobby; the bot stays out.
+    #   - `#notification` — legacy reserved channel from earlier versions;
+    #     no longer auto-created, but silenced here so the bot does not
+    #     accidentally engage in it on servers where the channel still
+    #     exists from a prior deployment.
+    SILENT_CHANNELS = set(RESERVED_CHANNELS) | {"general", "notification"}
 
     HELP_TEXT = (pathlib.Path(__file__).parent.parent.parent.parent / "docs" / "help.md").read_text(encoding="utf-8")
 
