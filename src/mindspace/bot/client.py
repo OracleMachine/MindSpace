@@ -32,10 +32,18 @@ except ImportError:
     pass
 
 class MindSpaceBot(discord.Client):
+    # Channels the bot auto-creates on startup; each posts its greeting once
+    # when first created. `#console` is the triple-output logger's Discord
+    # sink and the target of `/help` output.
     RESERVED_CHANNELS = {
-        "system-log": "🚀 **MindSpace System Log Initialized.**",
-        "notification": "🔔 **MindSpace Notification Channel Initialized.**",
+        "console": "🖥️ **MindSpace Console Initialized.**",
     }
+
+    # Channels where the bot does NOT respond to messages. Includes every
+    # reserved channel (the bot should not talk back to its own log/system
+    # channels) plus `#general` — Discord auto-creates `#general` on every
+    # server and users treat it as a low-friction lobby; the bot stays out.
+    SILENT_CHANNELS = set(RESERVED_CHANNELS) | {"general"}
 
     HELP_TEXT = (pathlib.Path(__file__).parent.parent.parent.parent / "docs" / "help.md").read_text(encoding="utf-8")
 
@@ -257,11 +265,11 @@ class MindSpaceBot(discord.Client):
             await interaction.response.defer(thinking=True)
             await services.handle_view_down_check(self, interaction.channel, interaction.guild, interaction=interaction)
 
-        @self.tree.command(name="help", description="Post the MindSpace usage guide to #notification.")
+        @self.tree.command(name="help", description="Post the MindSpace usage guide to #console.")
         async def cmd_help(interaction: discord.Interaction):
             await interaction.response.defer(ephemeral=True, thinking=False)
             channel = await self.handle_help(interaction.guild)
-            target = channel.mention if channel else "`#notification`"
+            target = channel.mention if channel else "`#console`"
             await interaction.followup.send(
                 f"📬 Help posted to {target}.", ephemeral=True
             )
@@ -338,11 +346,11 @@ class MindSpaceBot(discord.Client):
 
     async def handle_help(self, guild):
         channel = await self._ensure_channel(
-            guild, "notification", self.RESERVED_CHANNELS["notification"]
+            guild, "console", self.RESERVED_CHANNELS["console"]
         )
         if channel:
             await self.send_message_safe(channel, self.HELP_TEXT)
-            logger.info("**HELP**: posted usage guide to #notification", guild)
+            logger.info("**HELP**: posted usage guide to #console", guild)
         return channel
 
     async def handle_sync(self, channel, guild):
@@ -634,7 +642,7 @@ class MindSpaceBot(discord.Client):
         while True:
             msg = await self._log_queue.get()
             if self.guilds:
-                await self.send_system_log(self.guilds[0], msg)
+                await self.send_console_log(self.guilds[0], msg)
             self._log_queue.task_done()
 
     async def close(self):
@@ -663,8 +671,8 @@ class MindSpaceBot(discord.Client):
         for name, greeting in self.RESERVED_CHANNELS.items():
             await self._ensure_channel(guild, name, greeting)
 
-    async def send_system_log(self, guild, message):
-        channel = await self._ensure_channel(guild, "system-log")
+    async def send_console_log(self, guild, message):
+        channel = await self._ensure_channel(guild, "console")
         if channel: await channel.send(message)
 
     async def send_message_safe(self, channel, content, interaction: discord.Interaction = None):
@@ -704,6 +712,6 @@ class MindSpaceBot(discord.Client):
                 await channel.send(chunk)
 
     async def on_message(self, message):
-        if message.author == self.user or message.channel.name in self.RESERVED_CHANNELS: return
+        if message.author == self.user or message.channel.name in self.SILENT_CHANNELS: return
         for handler in self.message_handlers:
             if await handler.handle(message, self): break

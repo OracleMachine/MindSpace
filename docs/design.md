@@ -90,7 +90,7 @@ graph TD
 | `knowledgebase/pageindex.py` | `PageIndexManager`: reserved interface for PDF deep-document Q&A; all methods are no-op stubs pending a future backend |
 | `mcp_bridge.py` | MCP (Model Context Protocol) integration. Handles two-pronged sync: rendering the active profile's `mcp.servers` into Gemini CLI's `settings.json` for active commands, and managing an `MCPSessionPool` for native SDK tool use in passive dialogue. |
 | `config.py` | Centralized configuration for paths, models, brain type, history char limit, ignored extensions, and MCP server definitions. |
-| `logger.py` | Dual-output logger: console (all levels) + Discord `#system-log` (INFO and above, guild-scoped) |
+| `logger.py` | Triple-output logger: stdout + file + Discord `#console` channel, each level independently configurable |
 
 ---
 

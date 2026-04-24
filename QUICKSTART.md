@@ -49,7 +49,7 @@ The rest of the profile controls logging, storage, brains, and MCP. Full templat
 log:
   stream_level: DEBUG       # console — DEBUG | INFO | WARNING | ERROR
   file_level: DEBUG         # file — rotates daily, keeps 3 days
-  discord_level: INFO       # Discord #system-log channel
+  discord_level: INFO       # Discord #console channel
   file_path: ~/logs/MindSpace/mindspace.log
 
 storage:

@@ -43,7 +43,7 @@ The bot branches on a single question: **did you @mention me?** That's the expli
 - `/view_down_check` — Top-down sweep of the view tree: re-challenge every subfolder view against its evidence, then check each descendant view against the channel-root stance. Run irregularly to catch drift the per-commit hook missed.
 - `/omni <query>` — Cross-KB synthesis across all channel folders.
 - `/sync` — Manually rebuild the vector index for the current channel (picks up external filesystem edits).
-- `/help` — Post this guide to `#notification`.
+- `/help` — Post this guide to `#console`.
 
 ## The view tree
 Every folder under a channel can hold its own `view.md` — a concise stance / opinion / conclusion distilled from the evidence files in that folder. The channel-root `view.md` is the **master view**: it's the only one you can *initiate* changes to (via `/change_my_view`). Subfolder views are **LLM-initiated** — only the agent's challenger and consistency checks propose updates to them.
@@ -52,5 +52,5 @@ Every view change, master or subfolder, still goes through the **proposal UI** (
 
 While the cascade runs you'll see a single 🧭 status message in the channel that updates in place through each step (`[3/8] Upward-reconciling ancestors from \`Research/AI\`...`), then disappears when the bot is done. Commands that touch many folders may take 20-60 seconds before reporting "done" — the status ticker is there so the wait isn't silent.
 
-## Reserved channels
-`#system-log` and `#notification` are managed by the bot. Messages posted in them are ignored. `/help` always routes its reply here to keep your working channels clean.
+## Silent channels
+`#console` is bot-managed — all logger output and `/help` replies land there. `#general` is not bot-managed, but the bot stays silent in it by convention (Discord auto-creates `#general` as a lobby; the bot does not interject). Messages in either channel get no reply.

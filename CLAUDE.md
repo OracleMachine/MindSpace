@@ -58,7 +58,7 @@ Thought/
 - **`manager.py`** — `KnowledgeBaseManager`: All filesystem and Git operations. Creates per-server repos, manages channel folders, appends thoughts, and performs `git commit` after every active command. `save_state` returns `{touched, sha}` so the bot can drive the view-tree challenger. Hierarchical view helpers: `read_view`, `write_view`, `get_view_chain`, `list_subfolders_with_content`, `read_folder_context`.
 - **`mcp_bridge.py`** — MCP integration. `sync_cli_settings()` renders MCP servers into Gemini CLI's settings.json. `MCPSessionPool` manages live `ClientSession`s for the dialogue brain via AFC.
 - **`config.py`** — Thin YAML loader. Reads `profiles/<name>.yaml` at repo root, where `<name>` is `$MINDSPACE_PROFILE` (defaults to `default`). `$MINDSPACE_CONFIG` overrides the path outright. Exposes all settings as module-level constants. Secrets are inline in the profile under `credentials:` (no env-var fallback).
-- **`logger.py`** — `MindSpaceLogger`: Triple-output logger (console + file + Discord `#system-log` channel), each with independent configurable levels.
+- **`logger.py`** — `MindSpaceLogger`: Triple-output logger (stdout + file + Discord `#console` channel), each with independent configurable levels. `/help` output is also routed to `#console`.
 
 ### Design Principles
 
@@ -104,7 +104,7 @@ credentials:
 log:
   stream_level: DEBUG       # console — DEBUG | INFO | WARNING | ERROR
   file_level: DEBUG         # file — rotates daily, keeps 3 days
-  discord_level: INFO       # Discord #system-log channel
+  discord_level: INFO       # Discord #console channel
   file_path: ~/logs/MindSpace/mindspace.log
 
 storage:
