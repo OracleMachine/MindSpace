@@ -11,9 +11,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 One agent per profile, one process per agent:
 
 ```bash
-python run.py <profile>     # profile name, e.g. `default` → profiles/default.yaml
-python run.py work.yaml     # filename also accepted
-python run.py ./profiles/team-b.yaml   # explicit path also accepted
+./profiles/run.sh <profile>              # profile name, e.g. `mindspace` → profiles/mindspace.yaml
+./profiles/run.sh mindspace.yaml         # filename form also works
+./profiles/run.sh /abs/path/team-b.yaml  # explicit path also accepted
 ```
 
 Each profile YAML is a self-contained bot config (`credentials:`, model
@@ -92,9 +92,9 @@ For a full list of commands (`!organize`, `!research`, `!change_my_view`, etc.) 
 Each agent has its own `profiles/<name>.yaml` at the repo root. The profile is a standalone config — `credentials:` (Discord + Gemini keys inline), `log:`, `storage:`, `brains:`, `conversation:`, `mcp:` — everything one agent needs, with no shared global state between agents.
 
 Profile resolution order inside `config.py`:
-1. `$MINDSPACE_CONFIG` — absolute path (what `run.py` sets).
+1. `$MINDSPACE_CONFIG` — absolute path (what `profiles/run.sh` sets).
 2. `$MINDSPACE_PROFILE` — profile name → `profiles/<name>.yaml`.
-3. Fallback → `profiles/default.yaml` (none tracked in git — `run.py` always sets #1, so this only fires for bare `python -m mindspace.main` invocations and errors out if the user hasn't created the file).
+3. Fallback → `profiles/default.yaml` (none tracked in git — `run.sh` always sets #1, so this only fires for bare `python -m mindspace.main` invocations and errors out if the user hasn't created the file).
 
 Bot identity (the value spliced into `ENGAGE_DIALOGUE_SYSTEM_PROMPT` as `{agent_name}`) comes from `self.user.display_name` after the bot logs in to Discord — the same value Discord already stamps on the bot's messages in channel history. Keeping the prompt's self-reference and the history author label identical avoids confusing the LLM when it reads prior turns.
 

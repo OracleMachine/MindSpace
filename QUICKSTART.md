@@ -94,9 +94,9 @@ Any `${VAR}` placeholder inside the `openviking:` section is expanded from the e
 ## 4. Running the Agent
 
 ```bash
-python run.py my-agent       # loads profiles/my-agent.yaml
-python run.py my-agent.yaml  # filename form also works
-python run.py ./profiles/my-agent.yaml  # explicit path also works
+./profiles/run.sh my-agent              # loads profiles/my-agent.yaml
+./profiles/run.sh my-agent.yaml         # filename form also works
+./profiles/run.sh /abs/path/myagent.yaml  # explicit path also accepted
 ```
 
 One process per agent. To run multiple bots concurrently, open multiple shells (or use your process manager of choice) and launch each with its own profile.
