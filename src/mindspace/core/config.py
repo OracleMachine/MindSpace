@@ -37,7 +37,6 @@ def _expand_env(obj):
 
 class BrainType(str, Enum):
     GOOGLE_SDK = "GoogleGenAISdk"
-    LITELLM = "litellm"
     GEMINI_CLI = "gemini-cli"
 
 class Log:

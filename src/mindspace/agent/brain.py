@@ -3,11 +3,14 @@ import asyncio
 import subprocess
 import json
 from abc import ABC, abstractmethod
-from google import genai
-from google.genai import types
 
 from mindspace.core import config
 from mindspace.core.logger import logger
+
+# google.genai is lazy-imported inside GoogleGenAIBrain.__init__ and
+# ._build_config — it costs ~3.5 seconds to import and only this one brain
+# needs it. Keeping it out of module scope lets `main.py` log the startup
+# line before the cost is paid (once per process; Python caches the module).
 
 class LLMBrain(ABC):
     @abstractmethod
@@ -37,6 +40,7 @@ class LLMBrain(ABC):
 
 class GoogleGenAIBrain(LLMBrain):
     def __init__(self, model=config.Brains.GEMINI_SDK_MODEL):
+        from google import genai  # lazy (~3.5s) — see module header comment
         self.model = model
         self.client = genai.Client(api_key=config.Credentials.GEMINI_API_KEY)
 
@@ -59,6 +63,7 @@ class GoogleGenAIBrain(LLMBrain):
 
     @staticmethod
     def _build_config(system_ctx: str, tools: list):
+        from google.genai import types  # lazy — already cached after first call
         kwargs = {}
         if system_ctx:
             kwargs["system_instruction"] = system_ctx

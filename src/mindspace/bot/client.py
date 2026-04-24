@@ -23,14 +23,6 @@ from mindspace.bot import services
 from mindspace.agent import prompts
 import mindspace.agent.mcp as mcp_bridge
 
-# CRITICAL: Suppress litellm background logging workers BEFORE they can start.
-try:
-    import litellm
-    litellm._suppress_logging_worker = True
-    litellm.suppress_debug_info = True
-except ImportError:
-    pass
-
 class MindSpaceBot(discord.Client):
     # Channels the bot auto-creates on startup; each posts its greeting once
     # when first created. `#console` is the triple-output logger's Discord
