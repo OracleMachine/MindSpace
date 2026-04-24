@@ -9,17 +9,12 @@ def _preflight_check():
     """Verify dependencies and API keys."""
     logger.info("Preflight: checking dependencies...")
     try:
-        from pageindex import PageIndexClient
         import openviking as ov
         import git
     except ImportError as e:
         raise RuntimeError(f"Missing dependency: {e}")
 
     try:
-        logger.info("Preflight: validating PageIndex API key...")
-        pi_client = PageIndexClient(api_key=config.Credentials.PAGEINDEX_API_KEY)
-        pi_client.list_documents(limit=1)
-
         logger.info("Preflight: validating OpenViking...")
         os.environ.setdefault("OPENVIKING_CONFIG_FILE", config.Paths.VIKING_CONF)
         ov_client = ov.SyncOpenViking(path=config.Paths.VIKING_DATA)
@@ -68,7 +63,6 @@ def main():
     required = {
         "credentials.discord_token": config.Credentials.DISCORD_TOKEN,
         "credentials.gemini_api_key": config.Credentials.GEMINI_API_KEY,
-        "credentials.pageindex_api_key": config.Credentials.PAGEINDEX_API_KEY,
     }
     missing = [k for k, v in required.items() if not v]
     if missing:

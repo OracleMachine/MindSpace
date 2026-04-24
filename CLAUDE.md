@@ -74,12 +74,12 @@ Two brains run in parallel, each specialized for its role:
 - **Dialogue brain** — `GoogleGenAIBrain` (Google GenAI SDK). Passive chat, URL/file analysis, commit messages. Uses AFC (Automatic Function Calling) for tool dispatch including MCP sessions.
 - **Command brain** — `GeminiCLIBrain` (Gemini CLI `gemini -y`). `!organize`, `!research`, `!omni`. Web search, file I/O, multi-step agentic loops. Config isolated via `GEMINI_CLI_HOME=Thought/bot-home`; workspace sandboxed via `cwd`.
 
-### OpenViking & PageIndex
+### OpenViking & PDF deep-reasoning
 
 - **OpenViking** (`viking.py`): Semantic vector search. Indexes all `.md` files in `Channels/` into a vector DB at `Thought/openviking/`. Config at `Thought/ov.conf` (loaded via `OPENVIKING_CONFIG_FILE` env var set in code). Provides channel-scoped context for passive dialogue and global context for `!omni`.
-- **PageIndex** (`pageindex_manager.py`): Cloud service at `api.pageindex.ai`. Deep PDF document reasoning — uploads PDFs, builds tree structures, enables Q&A. Used during file ingestion (PDF) and `!research`. Requires `PAGEINDEX_API_KEY`.
+- **`PageIndexManager`** (`knowledgebase/pageindex.py`): Reserved interface for PDF deep-document Q&A. No backend is currently wired — the class's public methods (`index_document`, `query_channel`, `get_tree`, `rebuild_index`, `validate`, etc.) are no-op stubs returning empty values of their advertised shapes. Every caller site stays untouched so a future PDF Q&A backend can replace just this file's bodies.
 
-Install: `pip install openviking pageindex`
+Install: `pip install openviking`
 
 ### Discord Commands
 
@@ -87,7 +87,7 @@ For a full list of commands (`!organize`, `!research`, `!change_my_view`, etc.) 
 
 ## Configuration
 
-Each agent has its own `profiles/<name>.yaml` at the repo root. The profile is a standalone config — `credentials:` (Discord + Gemini + PageIndex keys inline), `log:`, `storage:`, `brains:`, `conversation:`, `mcp:` — everything one agent needs, with no shared global state between agents.
+Each agent has its own `profiles/<name>.yaml` at the repo root. The profile is a standalone config — `credentials:` (Discord + Gemini keys inline), `log:`, `storage:`, `brains:`, `conversation:`, `mcp:` — everything one agent needs, with no shared global state between agents.
 
 Profile resolution order inside `config.py`:
 1. `$MINDSPACE_CONFIG` — absolute path (what `run.py` sets).
@@ -100,7 +100,6 @@ Bot identity (the value spliced into `ENGAGE_DIALOGUE_SYSTEM_PROMPT` as `{agent_
 credentials:
   discord_token: "..."        # required — bot token for this agent
   gemini_api_key: "..."       # required
-  pageindex_api_key: "..."    # required
 
 log:
   stream_level: DEBUG       # console — DEBUG | INFO | WARNING | ERROR

@@ -14,7 +14,7 @@ The bot branches on a single question: **did you @mention me?** That's the expli
 1. The bot reads the file — and, for text-ish types (`.md`, `.txt`, `.json`, `.py`, etc.), a short content snippet.
 2. An LLM sees the current channel's folder tree and picks a target **subfolder** + a content-based **filename**, preferring to reuse existing folders rather than inventing new ones. For binary files (PDFs, images) the LLM routes by filename alone.
 3. The file is written to `<channel>/<subfolder>/<new-filename>`. Name collisions get a `-2`, `-3`, … suffix automatically.
-4. PDFs are uploaded to **PageIndex** for deep document Q&A. Text files get a one-line LLM summary echoed back to the channel.
+4. Text files get a one-line LLM summary echoed back to the channel. PDFs are saved without a deep-document summary — the PDF deep-reasoning backend is currently disabled.
 5. Everything is committed to Git with a generated message. The final path is posted in the source channel so you can see where it landed.
 
 ### Reviewed ingest (@mention + `.md` / `.markdown` / `.txt`)

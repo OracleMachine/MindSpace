@@ -55,7 +55,6 @@ class Credentials:
     _creds = _cfg.get("credentials", {})
     DISCORD_TOKEN = _creds.get("discord_token")
     GEMINI_API_KEY = _creds.get("gemini_api_key")
-    PAGEINDEX_API_KEY = _creds.get("pageindex_api_key")
 
 
 class Storage:

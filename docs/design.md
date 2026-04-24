@@ -6,7 +6,7 @@ Create an AI agent that acts as a cognitive partner across three primary functio
 
 **Philosophy:** "Discord as the Input Stream, Filesystem as the Source of Truth."
 
-The system uses **VikingContextManager** (wrapping OpenViking) for context navigation and **PageIndexManager** (wrapping PageIndex) for deep PDF document reasoning, resulting in a human-readable, self-organizing filesystem backed by **Git** for full auditability.
+The system uses **VikingContextManager** (wrapping OpenViking) for context navigation. **PageIndexManager** reserves the interface for PDF deep-document reasoning — currently stubbed, so call sites keep working while no backend is wired. Everything is backed by **Git** for full auditability.
 
 ---
 
@@ -16,7 +16,7 @@ The system uses **VikingContextManager** (wrapping OpenViking) for context navig
 - **Command Brain:** Gemini CLI (`gemini -y`) — agentic `!organize` / `!research` / `!omni` with web search, file I/O, multi-step loops (`COMMAND_BRAIN_TYPE = "gemini-cli"`)
 - **Language:** Python 3.12+
 - **Semantic Search:** [OpenViking](https://github.com/volcengine/OpenViking) — wrapped by `VikingContextManager` in `viking.py`; fully integrated
-- **PDF Reasoning:** [PageIndex](https://github.com/VectifyAI/PageIndex) — wrapped by `PageIndexManager` in `pageindex_manager.py`; fully integrated
+- **PDF Reasoning:** reserved interface (`PageIndexManager` in `knowledgebase/pageindex.py`) — no backend currently wired; callers see empty results
 - **Front-end:** Discord API (`discord.py`), supporting both `!prefix` and `/slash` commands
 - **Version Control:** Git (one repository per Discord Server, stored at `BASE_STORAGE_PATH`)
 
@@ -87,7 +87,7 @@ graph TD
 | `manager.py` | Filesystem writes, Git commits, orchestrated `save_state` (commit + indexing; returns `{touched, sha}` so callers can drive the view-tree challenger), per-channel conversation history, stream reads, and the hierarchical view helpers (`read_view`, `write_view`, `get_view_chain`, `list_subfolders_with_content`, `read_folder_context`). |
 | `tools.py` | `MindSpaceTools`: closure-bound tool functions exposed to the LLM during passive dialogue (list files, search channel KB, search global KB, read hierarchical view chain, record thought, propose update). |
 | `viking.py` | `VikingContextManager`: OpenViking wrapper; channel-scoped and global semantic search modes |
-| `pageindex_manager.py` | `PageIndexManager`: PageIndex cloud API wrapper; PDF upload, async processing, channel-scoped deep Q&A |
+| `knowledgebase/pageindex.py` | `PageIndexManager`: reserved interface for PDF deep-document Q&A; all methods are no-op stubs pending a future backend |
 | `mcp_bridge.py` | MCP (Model Context Protocol) integration. Handles two-pronged sync: rendering the active profile's `mcp.servers` into Gemini CLI's `settings.json` for active commands, and managing an `MCPSessionPool` for native SDK tool use in passive dialogue. |
 | `config.py` | Centralized configuration for paths, models, brain type, history char limit, ignored extensions, and MCP server definitions. |
 | `logger.py` | Dual-output logger: console (all levels) + Discord `#system-log` (INFO and above, guild-scoped) |
@@ -179,7 +179,7 @@ The status message (`🧠 **Thinking...**`) is sent before the brain call and de
 On `on_ready`, the bot:
 1. Scans Discord channel history (last 50 messages per channel) and seeds the in-memory history cache (`_seed_channel_history`).
 2. Creates Discord channels for any KB folders that don't have a matching Discord channel (`_sync_kb_channels`).
-3. Runs `viking.rebuild_index()` and `pageindex.rebuild_index()` for a full initial sync.
+3. Runs `viking.rebuild_index()` (OpenViking full sync) and `pageindex.rebuild_index()` (no-op while the PDF backend is stubbed).
 
 ---
 
@@ -226,7 +226,7 @@ Keys are file paths relative to `Channels/`. Values track the file's mtime at th
 **Orchestrated Persistence (`save_state`):**
 The `KnowledgeBaseManager` decouples the source-of-truth (Git) from derived semantic indexes (Vector DB). 
 - **`git_commit(message)`**: Performs a surgical Git commit of the `Channels/` directory.
-- **`index_files(paths)`**: Incremental indexing of specific changed files in both OpenViking and PageIndex.
+- **`index_files(paths)`**: Incremental indexing of specific changed files in OpenViking. PDF calls pass through `PageIndexManager` but no-op until a PDF backend is wired.
 - **`save_state(message)`**: The primary orchestrator. It finds all modified/untracked files in `Channels/`, performs a `git_commit`, and then triggers `index_files` on the delta. This ensures the repo and the DB stay in sync for all major events (file drops, active commands, research).
 
 **Lazy Thought Indexing:**
@@ -277,14 +277,11 @@ For structured KB maintenance (updating existing `.md` files, models, or researc
 
 ---
 
-## 7. PageIndexManager: PDF Deep Reasoning
+## 7. PageIndexManager: reserved interface (currently stubbed)
 
-`pageindex_manager.py` wraps the PageIndex cloud API:
+`knowledgebase/pageindex.py` reserves the interface for PDF deep-document Q&A. The original PageIndex cloud integration is disabled — every public method (`index_document`, `query_channel`, `get_tree`, `get_or_create_folder`, `get_doc_ids_for_channel`, `rebuild_index`, `validate`) is a no-op returning an empty value of its advertised shape.
 
-- PDFs are submitted to a per-channel cloud folder and processed asynchronously (polled until ready).
-- A local `.pageindex_index.json` persists `{file_path → doc_id}` and `{channel → folder_id}` mappings across restarts to avoid re-uploading.
-- `query_channel()` runs deep Q&A against all indexed PDFs in a channel using `chat_completions`.
-- `rebuild_index()` is called at startup to submit any untracked PDFs.
+Every caller (`KnowledgeBaseManager.__init__` / `index_files` / `get_deep_context`, `MindSpaceAgent.analyze_file`, startup rebuild, `!research`) still invokes these methods. Swapping in a future backend — a different PDF deep-reasoning service, or a re-enabled PageIndex — only requires new bodies in this one file. The module logs one info-level line at first construction so operators know the feature is off.
 
 ---
 
@@ -294,7 +291,7 @@ For structured KB maintenance (updating existing `.md` files, models, or researc
 | :--- | :--- | :--- |
 | `!organize` / `/organize` | Scans untracked files, runs semantic reasoning, git commit | — |
 | `!consolidate` / `/consolidate` | Synthesizes `stream_of_conscious.md` into a permanent article, clears stream, git commit | `ARTICLE-<date>-<subject>.md` |
-| `!research [topic]` / `/research` | Deep-dive on topic using Viking + PageIndex context, git commit | `RESEARCH-<date>-<subject>.md` |
+| `!research [topic]` / `/research` | Deep-dive on topic using Viking context plus web sources, git commit. (The PDF deep-reasoning context path exists but is a no-op while the backend is stubbed.) | `RESEARCH-<date>-<subject>.md` |
 | `!omni [query]` / `/omni` | Cross-KB synthesis across **all** channel folders (global Viking traversal), git commit | `OMNI-<date>-<subject>.md` |
 | `!change_my_view [instruction]` / `/change_my_view` | Update the channel-root view via a reviewed proposal. Accepting also fires a downward consistency sweep that emits proposals for every subfolder view that drifts. | `view.md` |
 | `!view_down_check` / `/view_down_check` | Top-down sweep: re-challenge every content folder's local view, then a downward consistency sweep from the channel root. | — |
@@ -318,13 +315,13 @@ advice    = re.sub(r"<@!?\d+>", "", message.content).strip()   # may be empty
 
 | Case | Path | Behavior |
 | :--- | :--- | :--- |
-| No mention, any file | **Autoroute** (`_handle_file_autoroute`) | Read bytes via `attachment.read()`, build a content snippet (first 5000 bytes for text-ish files; filename only for PDFs/binaries), walk the channel folder for a tree listing, call `agent.route_file` for a `{subfolder, filename}` JSON verdict, sanitize against path traversal, write bytes to the final path (deduped on collision), run `analyze_file` for the PageIndex upload / LLM summary, then `save_state`. |
+| No mention, any file | **Autoroute** (`_handle_file_autoroute`) | Read bytes via `attachment.read()`, build a content snippet (first 5000 bytes for text-ish files; filename only for PDFs/binaries), walk the channel folder for a tree listing, call `agent.route_file` for a `{subfolder, filename}` JSON verdict, sanitize against path traversal, write bytes to the final path (deduped on collision), run `analyze_file` (text files → LLM summary; PDFs → no-op while the deep-reasoning backend is stubbed), then `save_state`. |
 | @mention + `.md`/`.markdown` | **Reviewed ingest** (`_handle_file_proposal`) | Read draft bytes into memory. `agent.plan_file_proposal` picks `mode: new\|update` and a `target_rel_path` using Viking KB context + the channel tree. `agent.merge_file_proposal` produces the final markdown — for updates, the model may emit the sentinel `NEW_FILE_INSTEAD` to escape to a new-file path if the target turns out to be a poor fit once the fresh disk content is in view. Result goes through `_create_proposal` + `_send_proposal`, reusing the existing `ProposalView` Apply/Discard/Refine UI. Apply performs the write + commit + index. Advice may be empty: the mention alone is enough to request review. |
 | @mention + non-`.md` | **Autoroute with advice** | Same as the no-mention autoroute, but the mention text is threaded into `agent.route_file`'s prompt as explicit steering. The proposal UI is `.md`-only because it relies on a readable text diff — for PDFs and binaries the mention still gets you content-aware placement with your words as a hint, just not a preview. |
 
 **Why mention-as-trigger rather than caption-as-trigger?** A caption-based branch conflates "user typed something" with "user wants review," which misfires in both directions: a casual `@bot here.md` with no extra text gets autorouted when the user clearly wanted attention, and a `here's my file lol` caption flips into the heavy path when the user just wanted quiet ingestion. A mention is an unambiguous, intentional signal that the bot should slow down and show its work.
 
-**PDFs route by filename signal alone.** `PageIndexManager` caches uploaded documents by absolute file path (`pageindex_manager.py`), so previewing a PDF's content would require uploading it. The routing LLM call operates on filename + user advice only; after the file lands at its final path, `analyze_file` runs the PageIndex upload exactly once at the correct location.
+**PDFs route by filename signal alone.** The routing LLM call operates on filename + user advice only (extracting text from a PDF is left to the deep-reasoning backend). After the file lands at its final path, `analyze_file` delegates any PDF work to `PageIndexManager` — currently a no-op interface stub.
 
 **No staging.** The earlier design staged attachments in `/tmp` to avoid double-indexing through `save_state`'s untracked-file scan. That complexity is unnecessary: `attachment.read()` returns bytes in memory, and writing them directly to the final path means only one file ever hits disk. One path, one index.
 
@@ -374,13 +371,13 @@ Either way, the event loop stays responsive throughout the multi-minute CLI run.
 - **Bot is quiet.** No unprompted messages, no pinned maps, no ASCII trees.
 - **Instant file delivery.** Every new `.md` file created is sent back to Discord as an attachment.
 - **File naming:** all output markdown files use lowercase `.md` extension with `TYPE-DATE-SUBJECT` format, where SUBJECT is a kebab-case slug derived from the topic/query/title (or extracted from the first H1 for consolidate/webpage). This keeps filenames human-scannable in `ls` and searchable by keyword.
-- **Preflight check on startup:** validates that PageIndex, OpenViking, and GitPython are installed and that API keys are functional before the Discord connection is established.
+- **Preflight check on startup:** validates that OpenViking and GitPython are installed and that API keys are functional before the Discord connection is established.
 
 ### 10.1 Commit Scope — `Channels/` only
 
 The bot's `git_commit()` deliberately stages **only** paths under `Channels/` (`git add Channels`, not `git add -A`). Change detection (`changed_files` / `untracked`) is scoped to the same prefix, so the post-commit indexer never even sees anything outside.
 
-**Why:** `Thought/` also holds `openviking/` (regenerable vector store, churns on every run), `bot-home/` (isolated Gemini CLI config), and local bookkeeping caches (`.viking_index.json`, `.pageindex_index.json`). Letting the bot auto-stage those would pollute the KB history with library runtime noise — and worse, would feed OpenViking's own internal `.md` artifacts back into `index_file()`, producing nonsensical channel names like `..` and corrupting the store.
+**Why:** `Thought/` also holds `openviking/` (regenerable vector store, churns on every run), `bot-home/` (isolated Gemini CLI config), and local bookkeeping caches (`.viking_index.json`; legacy `.pageindex_index.json` from when the PDF backend was wired). Letting the bot auto-stage those would pollute the KB history with library runtime noise — and worse, would feed OpenViking's own internal `.md` artifacts back into `index_file()`, producing nonsensical channel names like `..` and corrupting the store.
 
 **Note:** the repo can still track anything you want for manual inspection or archival — `git add -A` by hand is fine, and a full snapshot of `openviking/` state is useful for diffing or debugging. The bot simply refuses to do it for you. Bot commits stay content-only; manual commits can touch anything. The two histories interleave cleanly.
 

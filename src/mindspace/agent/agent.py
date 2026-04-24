@@ -183,11 +183,17 @@ class MindSpaceAgent:
         if ext == ".pdf":
             try:
                 doc_id = await asyncio.to_thread(pageindex.index_document, file_path, channel_name)
-                tree = await asyncio.to_thread(pageindex.get_tree, doc_id)
-                prompt = prompts.ANALYZE_PDF_PROMPT.format(tree=tree)
-                return doc_id, await self.brain.run_command_async(prompt)
+                if doc_id:
+                    tree = await asyncio.to_thread(pageindex.get_tree, doc_id)
+                    prompt = prompts.ANALYZE_PDF_PROMPT.format(tree=tree)
+                    return doc_id, await self.brain.run_command_async(prompt)
+                # Backend is a stub (no PDF deep-reasoning wired): save the PDF,
+                # skip the tree-based analysis. The ingest confirmation simply
+                # omits the LLM summary tail.
+                return None, ""
             except Exception as e:
                 logger.error(f"analyze_file: PDF indexing failed: {e}")
+                return None, ""
         raw = self._read_text_snippet(file_path)
         return None, await self.brain.run_command_async(prompts.ANALYZE_TEXT_PROMPT.format(raw=raw))
 

@@ -1,6 +1,6 @@
 # MindSpace: Quick Start Guide
 
-This guide will help you set up and run your Hierarchical Knowledge Agent using **Gemini** and **PageIndex**.
+This guide will help you set up and run your Hierarchical Knowledge Agent, powered by **Gemini**.
 
 ## 1. Prerequisites
 
@@ -8,7 +8,7 @@ Ensure you have the following installed and configured on your machine:
 - **Python 3.12+**
 - **Dependencies:**
   ```bash
-  pip install discord.py google-genai openviking pageindex GitPython httpx beautifulsoup4 pyyaml python-dotenv
+  pip install discord.py google-genai openviking GitPython httpx beautifulsoup4 pyyaml python-dotenv
   ```
 - **Gemini CLI:** Installed and authenticated (`gemini login`).
 - **Google AI Studio:** Obtain a Gemini API Key from [aistudio.google.com](https://aistudio.google.com/).
@@ -39,7 +39,6 @@ Create `profiles/my-agent.yaml` with at least the `credentials:` block:
 credentials:
   discord_token: "your_discord_bot_token"    # unique per agent
   gemini_api_key: "your_gemini_api_key"
-  pageindex_api_key: "your_pageindex_api_key"
 ```
 
 There is **no** `agent.name` field. The bot's display name comes straight from Discord (`self.user.display_name` after login) and is injected into the dialogue prompt, so whatever you named the bot in the Discord Developer Portal is what the LLM calls itself — and it matches the author label Discord puts on the bot's own messages in channel history.
@@ -93,7 +92,7 @@ python run.py ./profiles/my-agent.yaml  # explicit path also works
 
 One process per agent. To run multiple bots concurrently, open multiple shells (or use your process manager of choice) and launch each with its own profile.
 
-The launcher runs a preflight check (PageIndex, OpenViking, GitPython, credentials) before connecting to Discord. If anything is missing it will tell you.
+The launcher runs a preflight check (OpenViking, GitPython, credentials) before connecting to Discord. If anything is missing it will tell you.
 
 ## 5. Usage & Commands
 
@@ -105,7 +104,7 @@ The bot supports both **Slash Commands** (`/command`) and **Prefix Commands** (`
 | :--- | :--- | :--- |
 | `!organize` | Scans the current channel folder for untracked files. Uses Gemini CLI to autonomously reorganize them into semantic subfolders. | Git Commit + Report |
 | `!consolidate` | Synthesizes the cumulative `stream_of_conscious.md` into a structured, permanent Markdown article. Resets the stream. | `ARTICLE-YYYY-MM-DD-subject.md` |
-| `!research [topic]` | Deep-dive on a topic by querying **OpenViking** (vector search) and **PageIndex** (document analysis). Generates a cited research paper. | `RESEARCH-YYYY-MM-DD-subject.md` |
+| `!research [topic]` | Deep-dive on a topic by querying **OpenViking** (vector search) plus web sources. Generates a cited research paper. (PDF deep-document Q&A is currently disabled.) | `RESEARCH-YYYY-MM-DD-subject.md` |
 | `!omni [query]` | Cross-references the **entire knowledge base** (all channels) to answer broad queries with citations. | `OMNI-YYYY-MM-DD-subject.md` |
 | `!change_my_view [instruction]` | Update the channel's root stance (`view.md`) via a reviewed proposal. Accepting also fires a downward consistency sweep that emits proposals for any subfolder view that now conflicts. | `view.md` |
 | `!view_down_check` | Top-down sweep: re-challenge every subfolder's local view against its evidence, then check each descendant view against the channel-root stance. Catches drift the per-commit hook missed. | — |
@@ -115,7 +114,7 @@ The bot supports both **Slash Commands** (`/command`) and **Prefix Commands** (`
 
 1. **Active Dialogue (Tool-First)**: The dialogue brain has no pre-loaded KB context. When you ask a factual question, the model calls `search_channel_knowledge_base` to retrieve relevant data from OpenViking. Organic insights are recorded to the channel's stream-of-consciousness via `record_thought`. When you explicitly ask the bot to save / integrate / file something into the KB (e.g. "save your last reply", "整合进知识库"), or when it judges an insight belongs in a structured file, it calls `propose_update` and pops up a **reviewed proposal UI** (with a Git diff) right in the chat. Progress is shown live in a Discord status message.
 2. **URL Ingestion**: Paste a URL (HTTP/HTTPS) and the bot will remind you to paste the content manually for ingestion.
-3. **File Indexing**: Upload a PDF or other file. The bot saves it locally and uses **PageIndex** to index its content for future `!research` or `!omni` queries.
+3. **File Indexing**: Upload a PDF or other file. The bot saves it locally and indexes text-ish content into OpenViking for future `!research` or `!omni` queries. (PDF deep-document Q&A is currently disabled.)
 4. **Git Versioning**: Every major action (ingestion, organization, consolidation) triggers an automatic Git commit with an LLM-generated message.
 
 ## 6. MCP Server Setup (Optional)
