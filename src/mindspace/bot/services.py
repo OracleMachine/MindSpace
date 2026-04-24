@@ -202,8 +202,8 @@ def slugify_subject(text: str, max_len: int = 50) -> str:
     s = re.sub(r"[\s_]+", "-", s).strip("-")
     return s[:max_len].rstrip("-") or "untitled"
 
-async def handle_organize(bot, channel, guild):
-    await channel.send("🔄 Scanning channel folder...")
+async def handle_organize(bot, channel, guild, interaction: discord.Interaction = None):
+    await bot.send_message_safe(channel, "🔄 Scanning channel folder...", interaction=interaction)
     channel_name = channel.name
     channel_path = bot.kb.get_channel_path(channel_name)
 
@@ -215,7 +215,7 @@ async def handle_organize(bot, channel, guild):
     ]
 
     if not local_untracked:
-        await channel.send("✅ No untracked files in this channel to organize.")
+        await bot.send_message_safe(channel, "✅ No untracked files in this channel to organize.", interaction=interaction)
         return
 
     untracked_files = chr(10).join(f'  {f}' for f in local_untracked)
@@ -227,15 +227,17 @@ async def handle_organize(bot, channel, guild):
         channel_name=channel_name,
     )
     await bot._render_stream_to_channel(
-        channel, header="🔄 Gemini CLI organizing...", handle=handle,
+        channel, header="🔄 Gemini CLI organizing...", handle=handle, interaction=interaction,
     )
     report = handle.get_full_response()
 
+    # Deliver the report to the user before running the challenger gate so
+    # the output isn't hidden behind the approval prompt.
+    await bot.send_message_safe(channel, report or "No report generated.", interaction=interaction)
     commit_msg = await bot.agent.generate_commit_message(
         f"Organized #{channel_name} channel folder via Gemini CLI"
     )
     await bot.save_and_challenge(channel, guild, commit_msg)
-    await bot.send_message_safe(channel, report or "No report generated.")
     logger.info(f"**ORGANIZE**: {channel_name} - {commit_msg}", guild)
 
 async def handle_consolidate(bot, channel, guild):
@@ -285,15 +287,13 @@ async def handle_research(bot, channel, guild, topic, interaction: discord.Inter
         combined_context=combined or "(none — the KB had no relevant matches)"
     )
 
-    await bot.send_message_safe(channel, f"🔬 Running Gemini CLI on: {topic}\n(watch console for live progress)", interaction=interaction)
-
     handle = await bot.agent.stream(
         prompt=prompt,
         cwd=channel_path,
         channel_name=channel_name,
     )
-    header = f"🔬 Researching: **{topic}**"
-    await bot._render_stream_to_channel(channel, header=header, handle=handle)
+    header = f"🔬 Running Gemini CLI on: **{topic}**"
+    await bot._render_stream_to_channel(channel, header=header, handle=handle, interaction=interaction)
 
     if handle.returncode != 0:
         logger.error(f"RESEARCH: CLI failed with non-zero exit {handle.returncode}")
@@ -311,11 +311,10 @@ async def handle_research(bot, channel, guild, topic, interaction: discord.Inter
     lineage = f"\n\n---\n**Lineage:**\n- Path: {file_path}\n- URI: viking://{guild.name}/{channel_name}/{filename}"
     bot.kb.write_file(file_path, report + lineage)
 
-    commit_msg = await bot.agent.generate_commit_message(
-        f"Research synthesis on {topic}"
-    )
-    await bot.save_and_challenge(channel, guild, commit_msg)
-
+    # Deliver the artifact before the challenger gate. save_and_challenge now
+    # blocks on an approval prompt (30s timeout) — running it before the final
+    # edit would hide the .md file behind that prompt, forcing the user to
+    # click through the gate just to receive their output.
     if interaction is not None:
         try:
             await interaction.edit_original_response(
@@ -327,10 +326,15 @@ async def handle_research(bot, channel, guild, topic, interaction: discord.Inter
             await channel.send(f"✅ Research complete.", file=discord.File(file_path))
     else:
         await channel.send(f"✅ Research complete.", file=discord.File(file_path))
+
+    commit_msg = await bot.agent.generate_commit_message(
+        f"Research synthesis on {topic}"
+    )
+    await bot.save_and_challenge(channel, guild, commit_msg)
     logger.info(f"RESEARCH: completed — topic={topic!r} channel=#{channel_name}", guild)
 
-async def handle_omni(bot, channel, guild, query):
-    await channel.send(f"🌐 Gathering global KB context for: {query}...")
+async def handle_omni(bot, channel, guild, query, interaction: discord.Interaction = None):
+    await bot.send_message_safe(channel, f"🌐 Gathering global KB context for: {query}...", interaction=interaction)
     channel_name = channel.name
     channel_path = bot.kb.get_channel_path(channel_name)
 
@@ -348,11 +352,12 @@ async def handle_omni(bot, channel, guild, query):
     )
     await bot._render_stream_to_channel(
         channel, header=f"🌐 Gemini CLI synthesizing: {query}...", handle=handle,
+        interaction=interaction,
     )
     report = handle.get_full_response()
 
     if not report.strip():
-        await channel.send("⚠️ Omni synthesis produced no output.")
+        await bot.send_message_safe(channel, "⚠️ Omni synthesis produced no output.", interaction=interaction)
         return
 
     subject = slugify_subject(query)
@@ -361,11 +366,24 @@ async def handle_omni(bot, channel, guild, query):
     lineage = f"\n\n---\n**Lineage:**\n- Path: {file_path}\n- URI: viking://{guild.name}/omni/{filename}"
     bot.kb.write_file(file_path, report + lineage)
 
+    # Deliver the artifact before the challenger gate so the .md file isn't
+    # hidden behind the approval prompt.
+    if interaction is not None:
+        try:
+            await interaction.edit_original_response(
+                content="✅ Omni search complete.",
+                attachments=[discord.File(file_path)],
+            )
+        except discord.HTTPException as e:
+            logger.warning(f"OMNI: failed to attach file to interaction: {e}")
+            await channel.send("✅ Omni search complete.", file=discord.File(file_path))
+    else:
+        await channel.send("✅ Omni search complete.", file=discord.File(file_path))
+
     commit_msg = await bot.agent.generate_commit_message(
         f"Omni query synthesis: {query}"
     )
     await bot.save_and_challenge(channel, guild, commit_msg)
-    await channel.send(f"✅ Omni search complete.", file=discord.File(file_path))
     logger.info(f"**OMNI**: {query}", guild)
 
 async def handle_change_my_view(bot, channel, guild, instruction, interaction=None):

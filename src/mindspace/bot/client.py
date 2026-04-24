@@ -18,7 +18,7 @@ from mindspace.agent.agent import MindSpaceAgent
 from mindspace.agent.tools import MindSpaceTools
 from mindspace.knowledgebase.manager import KnowledgeBaseManager
 from mindspace.bot.handlers import ActiveCommandHandler, KnowledgeIngestionHandler, PassiveDialogueHandler
-from mindspace.bot.views import ProposalView, RefineModal, _render_diff, _format_proposal_message
+from mindspace.bot.views import ProposalView, RefineModal, ChallengeApprovalView, _render_diff, _format_proposal_message
 from mindspace.bot import services
 from mindspace.agent import prompts
 import mindspace.agent.mcp as mcp_bridge
@@ -179,17 +179,34 @@ class MindSpaceBot(discord.Client):
             return result
 
         total = len(steps)
+        step_list = "\n".join(f"• {label}" for label, _ in steps)
+        approval = ChallengeApprovalView(timeout=3600.0)
         try:
-            status_msg = await channel.send(f"🧭 Reconciling view tree ({total} steps)...")
+            status_msg = await channel.send(
+                f"🧭 **View-tree reconciliation ready** "
+                f"({total} step{'s' if total != 1 else ''})\n"
+                f"{step_list}\n"
+                f"*Auto-skip in 1h.*",
+                view=approval,
+            )
         except discord.HTTPException as e:
-            logger.warning(f"save_and_challenge: could not post status message: {e}")
-            status_msg = None
+            logger.warning(f"save_and_challenge: could not post approval gate: {e}")
+            return result
+
+        timed_out = await approval.wait()
+        if not approval.approved:
+            reason = "timed out — skipped" if timed_out else "skipped"
+            try:
+                await status_msg.edit(
+                    content=f"⏭️ View-tree reconciliation {reason}.", view=None,
+                )
+            except discord.HTTPException:
+                pass
+            return result
 
         async def _set_status(text: str) -> None:
-            if status_msg is None:
-                return
             try:
-                await status_msg.edit(content=text)
+                await status_msg.edit(content=text, view=None)
             except discord.HTTPException:
                 pass
 
@@ -203,11 +220,10 @@ class MindSpaceBot(discord.Client):
                 # worse than a warning in the log.
                 logger.warning(f"save_and_challenge: step {idx}/{total} '{label}' failed: {e}")
 
-        if status_msg is not None:
-            try:
-                await status_msg.delete()
-            except discord.HTTPException:
-                pass
+        try:
+            await status_msg.delete()
+        except discord.HTTPException:
+            pass
         return result
 
     async def handle_attachment_ingest(self, message):
@@ -238,7 +254,7 @@ class MindSpaceBot(discord.Client):
         @self.tree.command(name="organize", description="Re-sync and organize the current channel's knowledge base folder.")
         async def cmd_organize(interaction: discord.Interaction):
             await interaction.response.defer(thinking=True)
-            await services.handle_organize(self, interaction.channel, interaction.guild)
+            await services.handle_organize(self, interaction.channel, interaction.guild, interaction=interaction)
 
         @self.tree.command(name="consolidate", description="Synthesize stream of consciousness into a structured article.")
         async def cmd_consolidate(interaction: discord.Interaction):
@@ -261,7 +277,7 @@ class MindSpaceBot(discord.Client):
         @app_commands.describe(query="The broad query to search across the entire knowledge base")
         async def cmd_omni(interaction: discord.Interaction, query: str):
             await interaction.response.defer(thinking=True)
-            await services.handle_omni(self, interaction.channel, interaction.guild, query)
+            await services.handle_omni(self, interaction.channel, interaction.guild, query, interaction=interaction)
 
         @self.tree.command(name="view_down_check", description="Top-down view sweep: re-challenge every subfolder view and check each against the parent stance.")
         async def cmd_view_down_check(interaction: discord.Interaction):
@@ -326,25 +342,42 @@ class MindSpaceBot(discord.Client):
             if channel.name not in self.RESERVED_CHANNELS:
                 await self._seed_channel_history(channel)
 
-    async def _render_stream_to_channel(self, channel, header: str, handle) -> str:
-        status_msg = await channel.send(f"{header}\n```\n(initializing...)\n```")
-        all_parts: list[str] = []
+    async def _render_stream_to_channel(self, channel, header: str, handle,
+                                         interaction: discord.Interaction = None) -> str:
+        """Render a CLI stream into a single Discord message.
 
+        When `interaction` is provided, edits live into the slash command's
+        deferred response so the whole invocation stays in one bubble. Without
+        it, falls back to sending a fresh channel message (text-command path).
+        The stream body is intermediate progress — dropped when the CLI
+        finishes so only `{header} — ✅ done` remains. The full response is
+        returned for the caller to persist.
+        """
+        status_msg = None
+        if interaction is None:
+            status_msg = await channel.send(f"{header}\n```\n(initializing...)\n```")
+
+        async def _edit(content: str) -> None:
+            try:
+                if interaction is not None:
+                    await interaction.edit_original_response(content=content)
+                else:
+                    await status_msg.edit(content=content)
+            except discord.HTTPException:
+                pass
+
+        if interaction is not None:
+            await _edit(f"{header}\n```\n(initializing...)\n```")
+
+        all_parts: list[str] = []
         async for chunk in handle:
             all_parts.append(chunk)
             content = "".join(all_parts)
             if len(content) > 1800:
                 content = "..." + content[-1797:]
-            try:
-                await status_msg.edit(content=f"{header}\n```\n{content}\n```")
-            except discord.HTTPException:
-                pass
+            await _edit(f"{header}\n```\n{content}\n```")
 
-        try:
-            await status_msg.edit(content="✅ Task complete.")
-        except discord.HTTPException:
-            pass
-
+        await _edit(f"{header} — ✅ done")
         return "".join(all_parts).strip()
 
     async def handle_help(self, guild):

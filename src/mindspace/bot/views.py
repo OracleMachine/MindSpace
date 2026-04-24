@@ -140,6 +140,32 @@ class ProposalView(discord.ui.View):
         await interaction.response.send_modal(RefineModal(self))
 
 
+class ChallengeApprovalView(discord.ui.View):
+    """User gate in front of the view-tree reconciliation sweep.
+
+    Posted by `save_and_challenge` after the content commit but before any
+    challenger step runs. `approved` stays False unless a button press sets
+    it, so a timeout (or a Skip press) cleanly cancels the sweep without
+    the handler needing to distinguish the two paths.
+    """
+
+    def __init__(self, timeout: float = 3600.0):
+        super().__init__(timeout=timeout)
+        self.approved: bool = False
+
+    @discord.ui.button(label="Check", style=discord.ButtonStyle.green, emoji="✅")
+    async def approve(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.approved = True
+        await interaction.response.defer()
+        self.stop()
+
+    @discord.ui.button(label="Skip", style=discord.ButtonStyle.grey, emoji="⏭️")
+    async def skip(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.approved = False
+        await interaction.response.defer()
+        self.stop()
+
+
 class RefineModal(discord.ui.Modal, title="Refine Proposal"):
     feedback = discord.ui.TextInput(
         label="How should this be changed?",
