@@ -147,14 +147,18 @@ class MindSpaceBot(discord.Client):
         result = await asyncio.to_thread(self.kb.save_state, message)
         touched = result.get("touched", set())
 
+        # The upward sweep is a guaranteed no-op at the channel root (no
+        # ancestors to walk), so we skip adding it when rel_folder is empty —
+        # otherwise the gate would advertise phantom work.
         if view_scope is not None:
             steps: list[tuple[str, callable]] = []
             vchan, vrel = view_scope
             vscope_label = vrel or "<channel-root>"
-            steps.append((
-                f"Upward-reconciling ancestors from `{vscope_label}`",
-                lambda: services.check_upward_consistency(self, channel, guild, vchan, vrel),
-            ))
+            if vrel:
+                steps.append((
+                    f"Upward-reconciling ancestors from `{vscope_label}`",
+                    lambda: services.check_upward_consistency(self, channel, guild, vchan, vrel),
+                ))
             if cascade_mode == "both":
                 steps.append((
                     f"Downward-reconciling descendants of `{vscope_label}`",
@@ -170,10 +174,11 @@ class MindSpaceBot(discord.Client):
                     # `cn, rf` default-bound to avoid the classic late-binding-in-lambda pitfall.
                     lambda cn=chan_name, rf=rel_folder: services.challenge_local_view(self, channel, guild, cn, rf),
                 ))
-                steps.append((
-                    f"Upward-reconciling ancestors from `{scope}`",
-                    lambda cn=chan_name, rf=rel_folder: services.check_upward_consistency(self, channel, guild, cn, rf),
-                ))
+                if rel_folder:
+                    steps.append((
+                        f"Upward-reconciling ancestors from `{scope}`",
+                        lambda cn=chan_name, rf=rel_folder: services.check_upward_consistency(self, channel, guild, cn, rf),
+                    ))
 
         if not steps:
             return result
