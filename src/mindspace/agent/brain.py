@@ -156,7 +156,7 @@ class GeminiCLIBrain(LLMBrain):
     """
     Delegates to the Gemini CLI (gemini -y).
     Capabilities beyond the direct API: web search, file I/O, multi-step agentic loops.
-    Used for all commands (!organize, !consolidate, !research, !omni).
+    Used for all commands (!consolidate, !research, !omni).
     """
 
     def __init__(self, yolo: bool = True, model: str = None):

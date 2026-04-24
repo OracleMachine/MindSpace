@@ -13,7 +13,7 @@ The system uses **VikingContextManager** (wrapping OpenViking) for context navig
 ## 2. Technical Stack
 
 - **Dialogue Brain:** Google GenAI SDK (`google-genai`) — passive chat, file analysis, commit messages (`DIALOGUE_BRAIN_TYPE = "GoogleGenAISdk"`)
-- **Command Brain:** Gemini CLI (`gemini -y`) — agentic `!organize` / `!research` / `!omni` with web search, file I/O, multi-step loops (`COMMAND_BRAIN_TYPE = "gemini-cli"`)
+- **Command Brain:** Gemini CLI (`gemini -y`) — agentic `!research` / `!omni` with web search, file I/O, multi-step loops (`COMMAND_BRAIN_TYPE = "gemini-cli"`)
 - **Language:** Python 3.12+
 - **Semantic Search:** [OpenViking](https://github.com/volcengine/OpenViking) — wrapped by `VikingContextManager` in `viking.py`; fully integrated
 - **PDF Reasoning:** reserved interface (`PageIndexManager` in `knowledgebase/pageindex.py`) — no backend currently wired; callers see empty results
@@ -81,7 +81,7 @@ graph TD
 | Module | Responsibility |
 | :--- | :--- |
 | `bot.py` | Discord event loop (`on_message`), command routing (prefix `!` and slash `/`), startup sync. Single `KnowledgeBaseManager` instance (`self.kb`) initialized in `on_ready`. `on_guild_join` enforces the single-server constraint by leaving immediately if `self.kb` is already set. |
-| `services.py` | Core business logic for all active commands (`!organize`, `!consolidate`, `!research`, `!omni`, `!change_my_view`) plus the view-tree challenger (`challenge_local_view`, `check_upward_consistency`, `check_downward_consistency`, `handle_view_down_check`). |
+| `services.py` | Core business logic for all active commands (`!consolidate`, `!research`, `!omni`, `!change_my_view`) plus the view-tree challenger (`challenge_local_view`, `check_upward_consistency`, `check_downward_consistency`, `handle_view_down_check`). |
 | `prompts.py` | Centralized repository for all LLM prompt templates used by the agent and services. |
 | `agent.py` | LLM abstraction. `GoogleGenAIBrain` for dialogue (chat, file analysis, commit messages). `GeminiCLIBrain` for commands — exposes `stream(prompt, cwd)` returning a `CliStream` async-iterable handle; env (`GEMINI_CLI_HOME`) and args (`-y`, `-m`) are always injected. |
 | `manager.py` | Filesystem writes, Git commits, orchestrated `save_state` (commit + indexing; returns `{touched, sha}` so callers can drive the view-tree challenger), per-channel conversation history, stream reads, and the hierarchical view helpers (`read_view`, `write_view`, `get_view_chain`, `list_subfolders_with_content`, `read_folder_context`). |
@@ -271,7 +271,7 @@ For structured KB maintenance (updating existing `.md` files, models, or researc
 
 **Rationale enrichment.** Non-tool proposal paths (view-tree challenger, upward/downward consistency checks, `/change_my_view`) emit a short trigger string as their rationale — "Local view drift detected in `X`." or similar. `MindSpaceBot._enrich_rationale` runs inside `_send_proposal` and transparently upgrades any bullet-free rationale into a bold trigger header + bullet list via `JUSTIFY_PROPOSAL_PROMPT`. Rationales that already contain bullet lines (tool-initiated `propose_update`, file-drop planner) pass through unchanged — no double-enrichment.
 
-**Invariant:** Staged proposals are volatile (cleared on bot restart) and isolated (do not affect `git status` or semantic indexing until applied). This prevents "dirty" unapproved edits from being swept up by background tasks like `!organize`.
+**Invariant:** Staged proposals are volatile (cleared on bot restart) and isolated (do not affect `git status` or semantic indexing until applied). This keeps "dirty" unapproved edits out of the commit history and the semantic index until the user approves.
 
 **Invariant:** cache file present ⇔ OpenViking store matches cache. Deleting the cache is always safe; the store will self-heal on next startup.
 
@@ -289,7 +289,6 @@ Every caller (`KnowledgeBaseManager.__init__` / `index_files` / `get_deep_contex
 
 | Trigger | Action | Output file |
 | :--- | :--- | :--- |
-| `!organize` / `/organize` | Scans untracked files, runs semantic reasoning, git commit | — |
 | `!consolidate` / `/consolidate` | Synthesizes `stream_of_conscious.md` into a permanent article, clears stream, git commit | `ARTICLE-<date>-<subject>.md` |
 | `!research [topic]` / `/research` | Deep-dive on topic using Viking context plus web sources, git commit. (The PDF deep-reasoning context path exists but is a no-op while the backend is stubbed.) | `RESEARCH-<date>-<subject>.md` |
 | `!omni [query]` / `/omni` | Cross-KB synthesis across **all** channel folders (global Viking traversal), git commit | `OMNI-<date>-<subject>.md` |
@@ -329,7 +328,7 @@ advice    = re.sub(r"<@!?\d+>", "", message.content).strip()   # may be empty
 
 ## 9. Command Brain: Gemini CLI Execution
 
-Active commands (`!organize`, `!research`, `!omni`) delegate to the Gemini CLI subprocess via `GeminiCLIBrain.stream(prompt, cwd)`. The brain owns all invocation details (spawn, env injection, stdin piping, ANSI stripping); `bot.py` stays agnostic.
+Active commands (`!research`, `!omni`) delegate to the Gemini CLI subprocess via `GeminiCLIBrain.stream(prompt, cwd)`. The brain owns all invocation details (spawn, env injection, stdin piping, ANSI stripping); `bot.py` stays agnostic.
 
 ### 9.1 Config Isolation — `GEMINI_CLI_HOME`
 
@@ -347,7 +346,6 @@ Each command sets `cwd` to the smallest directory the CLI needs. In YOLO mode th
 
 | Command | `cwd` | Scope rationale |
 | :--- | :--- | :--- |
-| `!organize` | `<channel_path>` | Reorganizes one channel — no cross-channel access needed |
 | `!research` | `<channel_path>` | Report is written back into the same channel |
 | `!omni` | `Channels/` | Cross-channel synthesis requires sibling reads; still sandboxed from `.gemini/` at the KB root (the vector DB lives under `~/.cache/mindspace/<profile>/openviking/`, off-tree) |
 
@@ -357,7 +355,7 @@ Each command sets `cwd` to the smallest directory the CLI needs. In YOLO mode th
 
 `GeminiCLIBrain.stream()` spawns the subprocess and returns a `CliStream` handle — an async-iterable that yields ANSI-stripped, non-empty lines as the CLI emits them, and exposes `.returncode` once iteration completes. Two consumption patterns:
 
-- **Discord UI** (`!organize`, `!omni`): `bot._render_stream_to_channel(channel, header, handle)` edits a single live Discord message every ~2 seconds with the latest output tail, then marks it complete.
+- **Discord UI** (`!omni`): `bot._render_stream_to_channel(channel, header, handle)` edits a single live Discord message every ~2 seconds with the latest output tail, then marks it complete.
 - **Console + interaction edit** (`!research`): the handler iterates `async for line in handle` directly — each line is logged to the server console, and the deferred `/research` interaction's "thinking..." message is updated in place (no follow-up spam).
 
 Either way, the event loop stays responsive throughout the multi-minute CLI run.
@@ -391,7 +389,7 @@ MindSpace integrates MCP servers defined in the active profile (`profiles/<name>
 
 When the bot starts, `mcp_bridge.sync_cli_settings()` reads the `mcp.servers` dictionary from the active profile and renders it into the Gemini CLI's isolated `settings.json` (located at `<BASE_STORAGE_PATH>/.gemini/settings.json`).
 
-- This makes all MCP tools (e.g., Wisburg, Google Search) available to `!organize`, `!research`, and `!omni` via the CLI's native agentic loop.
+- This makes all MCP tools (e.g., Wisburg, Google Search) available to `!research` and `!omni` via the CLI's native agentic loop.
 - Servers are added to the `mcpServers` key in the CLI config.
 
 ### 11.2 Passive Dialogue (Google GenAI SDK)

@@ -326,10 +326,6 @@ class KnowledgeBaseManager:
                 return f.read()
         return ""
 
-    def list_untracked_files(self):
-        """Find untracked files on disk for the !organize command."""
-        return self._repo.untracked_files
-
     def list_channel_tree(self, channel_name: str, max_entries: int = 200) -> str:
         """Flat listing of the channel's folder structure for LLM routing prompts.
 

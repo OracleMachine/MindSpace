@@ -2,40 +2,6 @@
 Centralized prompt templates for MindSpace Agent and Services.
 """
 
-ORGANIZE_PROMPT = """
-You are organizing the MindSpace knowledge base channel folder for #{channel_name}.
-Your current working directory IS this channel folder — all paths are relative to it.
-
-UNTRACKED FILES TO ORGANIZE:
-{untracked_files}
-
-TASK:
-1. Read each file's name and content to understand its topic
-2. Determine the most semantically appropriate subfolder within this channel (e.g., Research/, Notes/, Articles/)
-3. Create subfolders as needed
-4. Move each file to its determined location
-
-CONSTRAINTS:
-- Never move or modify stream_of_conscious.md or view.md
-- Never move files that are already inside a subfolder
-- Operate only within this directory; do not reach into parent or sibling paths
-
-You have full write permissions. Make all decisions autonomously.
-
-WHEN DONE, output ONLY this markdown report (no other prose):
-## Organize Report
-**Summary:** [one sentence]
-
-**Moves:**
-- `<from>` → `<subfolder>/<file>`
-
-**Created Folders:**
-- `<folder>/`
-
-**Skipped:**
-- `<file>`: <reason>
-"""
-
 CONSOLIDATE_PROMPT = """Synthesize the raw stream-of-consciousness entries below into a permanent, structured article.
 
 RAW ENTRIES:
@@ -279,7 +245,7 @@ Reply naturally to the user."""
 
 COMMIT_MESSAGE_PROMPT = """Generate a one-line Git commit message for a knowledge-base change (not a code change). The context below describes what files/folders were created, modified, or moved inside a Discord channel's KB folder.
 
-FORMAT: `<type>(#<channel>): <concise summary>` where type is one of add|update|organize|consolidate|research|omni|view|ingest. Keep the whole line under 72 characters. Use present tense, imperative mood.
+FORMAT: `<type>(#<channel>): <concise summary>` where type is one of add|update|consolidate|research|omni|view|ingest. Keep the whole line under 72 characters. Use present tense, imperative mood.
 
 Output ONLY the message text — no body, no code fences, no trailing period."""
 
@@ -400,7 +366,7 @@ _LANGUAGE_MATCH_DIRECTIVE = """
 **Output language:** Match the dominant language of the user's input and the surrounding content. If the majority is Chinese, output in Chinese; if primarily English, output in English. Fixed technical tokens required by this prompt — literal sentinels (e.g. `VIEW_OK`, `NEW_FILE_INSTEAD`), JSON keys, controlled-vocabulary values such as commit-type tags — are never translated."""
 
 _CONTENT_PROMPTS = (
-    "ORGANIZE_PROMPT", "CONSOLIDATE_PROMPT", "RESEARCH_PROMPT", "OMNI_PROMPT",
+    "CONSOLIDATE_PROMPT", "RESEARCH_PROMPT", "OMNI_PROMPT",
     "CHANGE_VIEW_PROMPT", "DISTILL_LOCAL_VIEW_PROMPT", "DETECT_VIEW_CONFLICT_PROMPT",
     "JUSTIFY_PROPOSAL_PROMPT",
     "PROPOSE_UPDATE_EXISTING_PROMPT", "PROPOSE_UPDATE_NEW_PROMPT",

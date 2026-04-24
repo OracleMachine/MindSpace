@@ -256,11 +256,6 @@ class MindSpaceBot(discord.Client):
 
         self._log_publisher_task = self.loop.create_task(self._log_publisher())
 
-        @self.tree.command(name="organize", description="Re-sync and organize the current channel's knowledge base folder.")
-        async def cmd_organize(interaction: discord.Interaction):
-            await interaction.response.defer(thinking=True)
-            await services.handle_organize(self, interaction.channel, interaction.guild, interaction=interaction)
-
         @self.tree.command(name="consolidate", description="Synthesize stream of consciousness into a structured article.")
         async def cmd_consolidate(interaction: discord.Interaction):
             await interaction.response.defer(thinking=True)

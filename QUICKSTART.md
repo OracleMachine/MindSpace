@@ -111,7 +111,6 @@ The bot supports both **Slash Commands** (`/command`) and **Prefix Commands** (`
 
 | Command | Description | Output |
 | :--- | :--- | :--- |
-| `!organize` | Scans the current channel folder for untracked files. Uses Gemini CLI to autonomously reorganize them into semantic subfolders. | Git Commit + Report |
 | `!consolidate` | Synthesizes the cumulative `stream_of_conscious.md` into a structured, permanent Markdown article. Resets the stream. | `ARTICLE-YYYY-MM-DD-subject.md` |
 | `!research [topic]` | Deep-dive on a topic by querying **OpenViking** (vector search) plus web sources. Generates a cited research paper. (PDF deep-document Q&A is currently disabled.) | `RESEARCH-YYYY-MM-DD-subject.md` |
 | `!omni [query]` | Cross-references the **entire knowledge base** (all channels) to answer broad queries with citations. | `OMNI-YYYY-MM-DD-subject.md` |

@@ -84,7 +84,6 @@ Paste a URL (`http://…` or `https://…`) and I'll reply asking you to paste t
 
 ## Commands
 
-- `/organize` — scan untracked files in the current channel and semantically reorganize them. Commits the result.
 - `/consolidate` — synthesize `stream_of_conscious.md` into a structured dated article; clears the stream.
 - `/research <topic>` — generate a cited research report from KB context plus web search. Saves and posts the file.
 - `/omni <query>` — cross-KB synthesis across every channel folder.

@@ -3,7 +3,7 @@
 Two entry points, one config source (`config.MCP.SERVERS`):
 
 - `sync_cli_settings()` renders `mcpServers` into the Gemini CLI's
-  settings.json so the command brain (!organize, !research, !omni)
+  settings.json so the command brain (!research, !omni)
   picks them up via the rerooted GEMINI_CLI_HOME.
 
 - `MCPSessionPool` opens live `mcp.ClientSession`s over streamable HTTP

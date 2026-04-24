@@ -24,9 +24,6 @@ class ActiveCommandHandler:
             await bot.handle_help(message.guild)
             return True
 
-        if cmd == "organize":
-            await services.handle_organize(bot, message.channel, message.guild)
-            return True
         if cmd == "consolidate":
             await services.handle_consolidate(bot, message.channel, message.guild)
             return True

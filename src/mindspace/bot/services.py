@@ -204,44 +204,6 @@ def slugify_subject(text: str, max_len: int = 50) -> str:
     s = re.sub(r"[\s_]+", "-", s).strip("-")
     return s[:max_len].rstrip("-") or "untitled"
 
-async def handle_organize(bot, channel, guild, interaction: discord.Interaction = None):
-    await bot.send_message_safe(channel, "🔄 Scanning channel folder...", interaction=interaction)
-    channel_name = channel.name
-    channel_path = bot.kb.get_channel_path(channel_name)
-
-    rel_prefix = os.path.join("Channels", channel_name) + os.sep
-    local_untracked = [
-        f[len(rel_prefix):]
-        for f in bot.kb.list_untracked_files()
-        if f.startswith(rel_prefix)
-    ]
-
-    if not local_untracked:
-        await bot.send_message_safe(channel, "✅ No untracked files in this channel to organize.", interaction=interaction)
-        return
-
-    untracked_files = chr(10).join(f'  {f}' for f in local_untracked)
-    prompt = prompts.ORGANIZE_PROMPT.format(channel_name=channel_name, untracked_files=untracked_files)
-
-    handle = await bot.agent.stream(
-        prompt=prompt,
-        cwd=channel_path,
-        channel_name=channel_name,
-    )
-    await bot._render_stream_to_channel(
-        channel, header="🔄 Gemini CLI organizing...", handle=handle, interaction=interaction,
-    )
-    report = handle.get_full_response()
-
-    # Deliver the report to the user before running the challenger gate so
-    # the output isn't hidden behind the approval prompt.
-    await bot.send_message_safe(channel, report or "No report generated.", interaction=interaction)
-    commit_msg = await bot.agent.generate_commit_message(
-        f"Organized #{channel_name} channel folder via Gemini CLI"
-    )
-    await bot.save_and_challenge(channel, guild, commit_msg)
-    logger.info(f"**ORGANIZE**: {channel_name} - {commit_msg}", guild)
-
 async def handle_consolidate(bot, channel, guild):
     await channel.send("📑 Consolidating stream of consciousness...")
     channel_name = channel.name

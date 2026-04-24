@@ -53,7 +53,7 @@ Thought/
 ### Module Responsibilities
 
 - **`bot.py`** — `MindSpaceBot(discord.Client)`: The entry point. Handles `on_message` and routes to commands (delegated to `services.py`), file ingestion, or passive dialogue. Wraps tools with async progress decorators for Discord status updates.
-- **`services.py`** — Core business logic for active commands (`!organize`, `!consolidate`, `!research`, `!omni`, `!change_my_view`) and the view-tree challenger (`challenge_local_view`, `check_upward_consistency`, `check_downward_consistency`, `handle_view_down_check`).
+- **`services.py`** — Core business logic for active commands (`!consolidate`, `!research`, `!omni`, `!change_my_view`) and the view-tree challenger (`challenge_local_view`, `check_upward_consistency`, `check_downward_consistency`, `handle_view_down_check`).
 - **`prompts.py`** — Centralized repository for all LLM prompt templates used by the agent and services.
 - **`agent.py`** — `MindSpaceAgent`: Dual-brain LLM abstraction. `GoogleGenAIBrain` for dialogue (async chat via `achat`, file analysis, commit messages). `GeminiCLIBrain` for commands — owns the `gemini -y` subprocess, env (`GEMINI_CLI_HOME`) and args injection, and exposes `stream(prompt, cwd)` -> `CliStream` async-iterable handle. URLs in user messages are not scraped — the ingestion handler replies with a paste-content-manually hint.
 - **`tools.py`** — `MindSpaceTools`: closure-bound tool functions exposed to the LLM during passive dialogue (`list_channel_files`, `search_channel_knowledge_base`, `search_global_knowledge_base`, `list_global_files`, `get_view_chain`, `record_thought`, `propose_update`). `propose_update` refuses any path whose basename is `view.md` at any depth — view edits only flow through the challenger / `/change_my_view`.
@@ -74,7 +74,7 @@ Thought/
 Two brains run in parallel, each specialized for its role:
 
 - **Dialogue brain** — `GoogleGenAIBrain` (Google GenAI SDK). Passive chat, file analysis, commit messages. Uses AFC (Automatic Function Calling) for tool dispatch including MCP sessions.
-- **Command brain** — `GeminiCLIBrain` (Gemini CLI `gemini -y`). `!organize`, `!research`, `!omni`. Web search, file I/O, multi-step agentic loops. Config isolated via `GEMINI_CLI_HOME=<KB>` so the CLI reads `<KB>/.gemini/`; workspace sandboxed via `cwd`. A human opening a terminal in the same KB and running `gemini` shares the same `.gemini/` home.
+- **Command brain** — `GeminiCLIBrain` (Gemini CLI `gemini -y`). `!research`, `!omni`. Web search, file I/O, multi-step agentic loops. Config isolated via `GEMINI_CLI_HOME=<KB>` so the CLI reads `<KB>/.gemini/`; workspace sandboxed via `cwd`. A human opening a terminal in the same KB and running `gemini` shares the same `.gemini/` home.
 
 ### OpenViking & PDF deep-reasoning
 
@@ -85,7 +85,7 @@ Install: `pip install openviking`
 
 ### Discord Commands
 
-For a full list of commands (`!organize`, `!research`, `!change_my_view`, etc.) and detailed file ingestion workflows, refer to `docs/design.md` and `docs/help.md`.
+For a full list of commands (`!research`, `!omni`, `!change_my_view`, etc.) and detailed file ingestion workflows, refer to `docs/design.md` and `docs/help.md`.
 
 ## Configuration
 
