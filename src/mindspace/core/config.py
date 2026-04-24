@@ -93,7 +93,6 @@ class MCP:
     SERVERS: dict = _expand_env(_mcp.get("servers", {}))
 
 class Paths:
-    VIKING_DATA = os.path.join(Storage.BASE_PATH, "openviking")
     CHANNELS = os.path.join(Storage.BASE_PATH, "Channels")
     # Gemini CLI reads $GEMINI_CLI_HOME/.gemini/, so setting this to the KB
     # root means the bot and a human running `gemini` inside the same
@@ -101,7 +100,11 @@ class Paths:
     # bot used a separate `<KB>/bot-home/` which created a parallel, less
     # discoverable Gemini home alongside the human-visible one.
     GEMINI_CLI_HOME = Storage.BASE_PATH
-    # VIKING_CONF is materialized below from the profile's `openviking:` block.
+    # The two Viking paths below are assigned post-class from the per-profile
+    # cache dir (`~/.cache/mindspace/<profile>/`). Vector DB and rendered
+    # config live alongside the profile's other runtime state — off the KB
+    # so the knowledge directory holds only knowledge.
+    VIKING_DATA: str
     VIKING_CONF: str
 
 # Finalize Log Path (relative paths resolve under Storage.BASE_PATH)
@@ -109,17 +112,16 @@ if not os.path.isabs(Log.FILE_PATH):
     Log.FILE_PATH = os.path.join(Storage.BASE_PATH, Log.FILE_PATH)
 
 
-# --- OpenViking config: inline in profile, materialized to a JSON file ------
-# The OpenViking SDK reads its config from the path in OPENVIKING_CONFIG_FILE
-# (set in main.py). Historically this lived at `<BASE_PATH>/ov.conf` inside
-# the knowledge base; we now keep the config inline in the profile YAML under
-# an `openviking:` section so each agent's configuration is self-contained
-# and the knowledge base directory holds only knowledge, not agent config.
-#
-# At startup we render the inline section to a per-profile JSON file under
-# the user cache dir and expose its path as `Paths.VIKING_CONF`. `${VAR}`
-# tokens inside the section (e.g. `api_key: "${GEMINI_API_KEY}"`) are
-# substituted from os.environ by `_expand_env` — same behavior as MCP headers.
+# --- Per-profile runtime cache: vector DB + rendered OpenViking config ------
+# Everything under `~/.cache/mindspace/<profile>/` is per-agent runtime state
+# that MindSpace owns:
+#   - `openviking/` — OpenViking's vector DB, rebuilt from `Channels/` when
+#     missing; churns on every run, so it does not belong inside the KB git
+#     repo where it would bloat history with compaction noise.
+#   - `ov.conf` — JSON rendered from the profile's inline `openviking:`
+#     section. The SDK reads it via OPENVIKING_CONFIG_FILE (set in main.py).
+#     `${VAR}` tokens inside the section are substituted from os.environ by
+#     `_expand_env` — same behavior as MCP headers.
 _openviking_cfg = _expand_env(_cfg.get("openviking", {}))
 if not _openviking_cfg:
     raise ValueError(
@@ -130,6 +132,7 @@ if not _openviking_cfg:
 _profile_stem = os.path.splitext(os.path.basename(_CONFIG_PATH))[0]
 _profile_cache_dir = os.path.expanduser(f"~/.cache/mindspace/{_profile_stem}")
 os.makedirs(_profile_cache_dir, exist_ok=True)
+Paths.VIKING_DATA = os.path.join(_profile_cache_dir, "openviking")
 Paths.VIKING_CONF = os.path.join(_profile_cache_dir, "ov.conf")
 with open(Paths.VIKING_CONF, "w") as _f:
     json.dump(_openviking_cfg, _f, indent=2)

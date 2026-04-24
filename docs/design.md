@@ -208,7 +208,7 @@ Keys are file paths relative to `Channels/`. Values track the file's mtime at th
 
 | | Cache (bot) | OpenViking store |
 | :--- | :--- | :--- |
-| Location | `Thought/.viking_index.json` | `Thought/openviking/` |
+| Location | `<KB>/.viking_index.json` | `~/.cache/mindspace/<profile>/openviking/` |
 | Owner | `VikingContextManager` | OpenViking library |
 | Contents | `{file → mtime, uri}` bookkeeping | Vectors + SQLite DB |
 | Size | Kilobytes | Large (grows with KB) |
@@ -349,7 +349,7 @@ Each command sets `cwd` to the smallest directory the CLI needs. In YOLO mode th
 | :--- | :--- | :--- |
 | `!organize` | `<channel_path>` | Reorganizes one channel — no cross-channel access needed |
 | `!research` | `<channel_path>` | Report is written back into the same channel |
-| `!omni` | `Channels/` | Cross-channel synthesis requires sibling reads; still sandboxed from `.gemini/` and `openviking/` at the KB root |
+| `!omni` | `Channels/` | Cross-channel synthesis requires sibling reads; still sandboxed from `.gemini/` at the KB root (the vector DB lives under `~/.cache/mindspace/<profile>/openviking/`, off-tree) |
 
 **Config scope and workspace scope are independent.** Because the bot config is loaded as user-scope via `GEMINI_CLI_HOME` (not as workspace settings from `cwd/.gemini/`), `cwd` can be tightened to any subtree without losing the bot config. Headless-mode trust (stdin not a TTY) auto-trusts the workspace, so no folder-trust prompt appears.
 
@@ -377,9 +377,9 @@ Either way, the event loop stays responsive throughout the multi-minute CLI run.
 
 The bot's `git_commit()` deliberately stages **only** paths under `Channels/` (`git add Channels`, not `git add -A`). Change detection (`changed_files` / `untracked`) is scoped to the same prefix, so the post-commit indexer never even sees anything outside.
 
-**Why:** `<KB>/` also holds `openviking/` (regenerable vector store, churns on every run), `.gemini/` (Gemini CLI isolated home: `settings.json` rewritten on every launch, plus `history/`, `tmp/`, auth symlinks), and local bookkeeping caches (`.viking_index.json`; legacy `.pageindex_index.json` from when the PDF backend was wired). Letting the bot auto-stage those would pollute the KB history with library runtime noise — and worse, would feed OpenViking's own internal `.md` artifacts back into `index_file()`, producing nonsensical channel names like `..` and corrupting the store.
+**Why:** `<KB>/` also holds `.gemini/` (Gemini CLI isolated home: `settings.json` rewritten on every launch, plus `history/`, `tmp/`, auth symlinks) and the `.viking_index.json` bookkeeping cache. Letting the bot auto-stage those would pollute the KB history with library runtime noise — and the OpenViking vector DB (at `~/.cache/mindspace/<profile>/openviking/`) is likewise excluded by virtue of living outside the KB entirely. Auto-staging could also feed OpenViking's own internal `.md` artifacts back into `index_file()`, producing nonsensical channel names like `..` and corrupting the store.
 
-**Note:** the repo can still track anything you want for manual inspection or archival — `git add -A` by hand is fine, and a full snapshot of `openviking/` state is useful for diffing or debugging. The bot simply refuses to do it for you. Bot commits stay content-only; manual commits can touch anything. The two histories interleave cleanly.
+**Note:** the repo can still track anything you want for manual inspection or archival — `git add -A` by hand is fine. The bot simply refuses to do it for you. Bot commits stay content-only; manual commits can touch anything. The two histories interleave cleanly.
 
 ---
 

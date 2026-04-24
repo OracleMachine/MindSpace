@@ -43,8 +43,11 @@ Thought/
 ├── Channels/              <- channel folders (one per Discord channel)
 │   ├── general/
 │   └── oil-war-research/
-├── openviking/            <- OpenViking vector DB data
 └── .gemini/               <- Gemini CLI isolated home (shared by bot + manual `gemini` sessions)
+
+(OpenViking's vector DB and the rendered `ov.conf` live at
+ `~/.cache/mindspace/<profile>/` — off the KB, because they're per-agent
+ runtime state, not knowledge. See `src/mindspace/core/config.py`.)
 ```
 
 ### Module Responsibilities
