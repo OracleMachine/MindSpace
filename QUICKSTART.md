@@ -53,7 +53,7 @@ log:
   file_path: ~/logs/MindSpace/mindspace.log
 
 storage:
-  base_path: /home/yolo/repos/Thought    # where the knowledge base lives
+  base_path: ~/repos/Thought    # where the knowledge base lives
   ignored_extensions: ["pdf", "jpg"]    # extensions to skip during OpenViking indexing
 
 brains:
@@ -67,20 +67,29 @@ conversation:
   history_max_chars: 8000
 ```
 
-### Step 3.3: OpenViking Configuration
-The bot expects `ov.conf` inside your `storage.base_path` (e.g. `Thought/ov.conf`):
-```json
-{
-  "embedding": {
-    "dense": {
-      "provider": "openai",
-      "api_key": "your-key",
-      "model": "text-embedding-3-large",
-      "dimension": 1024
-    }
-  }
-}
+### Step 3.3: OpenViking Configuration (inline in profile)
+OpenViking config lives in the profile YAML under an `openviking:` section. At launch, `config.py` renders it to `~/.cache/mindspace/<profile>/ov.conf` and points `OPENVIKING_CONFIG_FILE` there — so the SDK still reads a file on disk, but the source of truth is your profile.
+
+Use a YAML anchor on `credentials.gemini_api_key` to avoid duplicating the key:
+```yaml
+credentials:
+  discord_token: "..."
+  gemini_api_key: &gemini_api_key "..."
+
+openviking:
+  embedding:
+    dense:
+      provider: gemini
+      model: models/gemini-embedding-2-preview
+      api_key: *gemini_api_key
+      dimension: 768
+  vlm:
+    provider: gemini
+    model: gemini-3-flash-preview
+    api_key: *gemini_api_key
 ```
+
+Any `${VAR}` placeholder inside the `openviking:` section is expanded from the environment at load time, so you can use env-var references if you prefer.
 
 ## 4. Running the Agent
 
@@ -163,7 +172,7 @@ Required for the dialogue brain's live session pool. The command brain (Gemini C
 On startup you should see:
 
 ```
-MCP: synced 2 server(s) into .../bot-home/.gemini/settings.json
+MCP: synced 2 server(s) into .../<KB>/.gemini/settings.json
 MCP: connected -> wisburg-mcp-server (https://mcp.wisburg.com/mcp) -- 12 tool(s)
 MCP: connected -> another-server (https://example.com/mcp) -- 5 tool(s)
 Preflight: MCP -- wisburg-mcp-server exposes 12 tool(s)
@@ -186,7 +195,7 @@ profiles/<active>.yaml
        +---> config.py: MCP_SERVERS (env vars expanded)
        |
        +---> mcp_bridge.sync_cli_settings()
-       |       \--> bot-home/.gemini/settings.json  --> Command brain (Gemini CLI)
+       |       \--> <KB>/.gemini/settings.json      --> Command brain (Gemini CLI)
        |
        \---> mcp_bridge.MCPSessionPool.connect()
                \--> live ClientSession per server   --> Dialogue brain (AFC)

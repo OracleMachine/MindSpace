@@ -32,7 +32,7 @@ MindSpace is a Discord bot that acts as a hierarchical knowledge agent. Philosop
 
 ### Key Data Flow
 
-1. Every Discord Server maps to a Git repo at `BASE_STORAGE_PATH` (`/home/yolo/repos/Thought`)
+1. Every Discord Server maps to a Git repo at `BASE_STORAGE_PATH` (e.g. `~/repos/Thought`)
 2. Each Discord channel maps to a folder inside `Channels/` in that repo
 3. Every channel folder contains `stream_of_conscious.md` — running log of extracted thoughts (recorded via `record_thought` tool call)
 
@@ -44,8 +44,7 @@ Thought/
 │   ├── general/
 │   └── oil-war-research/
 ├── openviking/            <- OpenViking vector DB data
-├── bot-home/              <- isolated Gemini CLI config (GEMINI_CLI_HOME)
-└── ov.conf                <- OpenViking config (uses ${GEMINI_API_KEY} env var)
+└── .gemini/               <- Gemini CLI isolated home (shared by bot + manual `gemini` sessions)
 ```
 
 ### Module Responsibilities
@@ -72,11 +71,11 @@ Thought/
 Two brains run in parallel, each specialized for its role:
 
 - **Dialogue brain** — `GoogleGenAIBrain` (Google GenAI SDK). Passive chat, file analysis, commit messages. Uses AFC (Automatic Function Calling) for tool dispatch including MCP sessions.
-- **Command brain** — `GeminiCLIBrain` (Gemini CLI `gemini -y`). `!organize`, `!research`, `!omni`. Web search, file I/O, multi-step agentic loops. Config isolated via `GEMINI_CLI_HOME=Thought/bot-home`; workspace sandboxed via `cwd`.
+- **Command brain** — `GeminiCLIBrain` (Gemini CLI `gemini -y`). `!organize`, `!research`, `!omni`. Web search, file I/O, multi-step agentic loops. Config isolated via `GEMINI_CLI_HOME=<KB>` so the CLI reads `<KB>/.gemini/`; workspace sandboxed via `cwd`. A human opening a terminal in the same KB and running `gemini` shares the same `.gemini/` home.
 
 ### OpenViking & PDF deep-reasoning
 
-- **OpenViking** (`viking.py`): Semantic vector search. Indexes all `.md` files in `Channels/` into a vector DB at `Thought/openviking/`. Config at `Thought/ov.conf` (loaded via `OPENVIKING_CONFIG_FILE` env var set in code). Provides channel-scoped context for passive dialogue and global context for `!omni`.
+- **OpenViking** (`viking.py`): Semantic vector search. Indexes all `.md` files in `Channels/` into a vector DB at `<KB>/openviking/`. Config lives inline in the profile's `openviking:` section; `config.py` renders it to `~/.cache/mindspace/<profile>/ov.conf` at startup and points `OPENVIKING_CONFIG_FILE` there. Provides channel-scoped context for passive dialogue and global context for `!omni`.
 - **`PageIndexManager`** (`knowledgebase/pageindex.py`): Reserved interface for PDF deep-document Q&A. No backend is currently wired — the class's public methods (`index_document`, `query_channel`, `get_tree`, `rebuild_index`, `validate`, etc.) are no-op stubs returning empty values of their advertised shapes. Every caller site stays untouched so a future PDF Q&A backend can replace just this file's bodies.
 
 Install: `pip install openviking`
@@ -108,7 +107,7 @@ log:
   file_path: ~/logs/MindSpace/mindspace.log
 
 storage:
-  base_path: /home/yolo/repos/Thought
+  base_path: ~/repos/Thought
 
 brains:
   dialogue_type: GoogleGenAISdk
@@ -138,7 +137,7 @@ profiles/<active>.yaml
        ├──> config.py: MCP_SERVERS (env vars expanded)
        │
        ├──> mcp_bridge.sync_cli_settings()
-       │      └──> bot-home/.gemini/settings.json (command brain)
+       │      └──> <KB>/.gemini/settings.json (command brain)
        │
        └──> mcp_bridge.MCPSessionPool.connect()
               └──> live ClientSession per server (dialogue brain)

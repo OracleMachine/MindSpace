@@ -1,3 +1,4 @@
+import json
 import os
 import yaml
 from enum import Enum
@@ -59,7 +60,10 @@ class Credentials:
 
 class Storage:
     _storage = _cfg.get("storage", {})
-    BASE_PATH = _storage.get("base_path", "/home/yolo/repos/Thought")
+    # `~` is expanded here so profiles (and the default) can use the portable
+    # form; downstream `Paths.*` all concatenate on this value, so they
+    # inherit the expansion without each needing to call expanduser.
+    BASE_PATH = os.path.expanduser(_storage.get("base_path", "~/repos/Thought"))
     VIKING_URI_PREFIX = _storage.get("openviking_uri_prefix", "viking://")
     IGNORED_EXTENSIONS = _storage.get("ignored_extensions", ["pdf"])
 
@@ -91,11 +95,44 @@ class MCP:
 class Paths:
     VIKING_DATA = os.path.join(Storage.BASE_PATH, "openviking")
     CHANNELS = os.path.join(Storage.BASE_PATH, "Channels")
-    VIKING_CONF = os.path.join(Storage.BASE_PATH, "ov.conf")
-    GEMINI_CLI_HOME = os.path.join(Storage.BASE_PATH, "bot-home")
+    # Gemini CLI reads $GEMINI_CLI_HOME/.gemini/, so setting this to the KB
+    # root means the bot and a human running `gemini` inside the same
+    # directory share one isolated home at `<KB>/.gemini/`. Previously the
+    # bot used a separate `<KB>/bot-home/` which created a parallel, less
+    # discoverable Gemini home alongside the human-visible one.
+    GEMINI_CLI_HOME = Storage.BASE_PATH
+    # VIKING_CONF is materialized below from the profile's `openviking:` block.
+    VIKING_CONF: str
 
 # Finalize Log Path (relative paths resolve under Storage.BASE_PATH)
 if not os.path.isabs(Log.FILE_PATH):
     Log.FILE_PATH = os.path.join(Storage.BASE_PATH, Log.FILE_PATH)
+
+
+# --- OpenViking config: inline in profile, materialized to a JSON file ------
+# The OpenViking SDK reads its config from the path in OPENVIKING_CONFIG_FILE
+# (set in main.py). Historically this lived at `<BASE_PATH>/ov.conf` inside
+# the knowledge base; we now keep the config inline in the profile YAML under
+# an `openviking:` section so each agent's configuration is self-contained
+# and the knowledge base directory holds only knowledge, not agent config.
+#
+# At startup we render the inline section to a per-profile JSON file under
+# the user cache dir and expose its path as `Paths.VIKING_CONF`. `${VAR}`
+# tokens inside the section (e.g. `api_key: "${GEMINI_API_KEY}"`) are
+# substituted from os.environ by `_expand_env` — same behavior as MCP headers.
+_openviking_cfg = _expand_env(_cfg.get("openviking", {}))
+if not _openviking_cfg:
+    raise ValueError(
+        f"Configuration error: 'openviking' section is required in {_CONFIG_PATH}. "
+        "Move your OpenViking config inline into the profile YAML (the bot no "
+        "longer reads a separate ov.conf file from the knowledge base directory)."
+    )
+_profile_stem = os.path.splitext(os.path.basename(_CONFIG_PATH))[0]
+_profile_cache_dir = os.path.expanduser(f"~/.cache/mindspace/{_profile_stem}")
+os.makedirs(_profile_cache_dir, exist_ok=True)
+Paths.VIKING_CONF = os.path.join(_profile_cache_dir, "ov.conf")
+with open(Paths.VIKING_CONF, "w") as _f:
+    json.dump(_openviking_cfg, _f, indent=2)
+del _openviking_cfg, _profile_stem, _profile_cache_dir, _f
 
 # (End of config)
