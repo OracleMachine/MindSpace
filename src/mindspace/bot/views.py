@@ -140,6 +140,81 @@ class ProposalView(discord.ui.View):
         await interaction.response.send_modal(RefineModal(self))
 
 
+class ArtifactProposalView(discord.ui.View):
+    """Gate a CLI-generated artifact behind a Save/Discard choice before
+    writing it to disk.
+
+    The full artifact content is held in-memory on the view; Discord shows
+    it as a downloadable attachment. Save writes to the target path,
+    indexes, commits, and runs `save_and_challenge`. Discard (or a 24-hour
+    timeout) drops the artifact — nothing lands on disk until the user
+    presses Save.
+    """
+
+    def __init__(self, bot, channel_name: str, rel_path: str,
+                 content: str, commit_action_desc: str,
+                 timeout: float = 86400.0):
+        super().__init__(timeout=timeout)
+        self.bot = bot
+        self.channel_name = channel_name
+        self.rel_path = rel_path
+        self.content = content
+        self.commit_action_desc = commit_action_desc
+        self.message: discord.Message | None = None
+
+    async def on_timeout(self):
+        if self.message is None:
+            return
+        try:
+            await self.message.edit(
+                content=f"🗑️ **Auto-discarded** `{self.rel_path}` — 24h timeout, not saved.",
+                attachments=[],
+                view=None,
+            )
+        except discord.HTTPException:
+            pass
+
+    @discord.ui.button(label="Save", style=discord.ButtonStyle.green, emoji="💾")
+    async def save(self, interaction: discord.Interaction, button: discord.ui.Button):
+        import os
+        await interaction.response.defer()
+        await interaction.edit_original_response(
+            content=f"⏳ **Saving `{self.rel_path}`...**",
+            attachments=[],
+            view=None,
+        )
+        abs_path = os.path.join(
+            self.bot.kb.channels_path, self.channel_name, self.rel_path,
+        )
+        self.bot.kb.write_file(abs_path, self.content)
+        await asyncio.to_thread(
+            self.bot.kb.index_files,
+            [os.path.join("Channels", self.channel_name, self.rel_path)],
+        )
+        commit_msg = await self.bot.agent.generate_commit_message(
+            self.commit_action_desc
+        )
+        await self.bot.save_and_challenge(
+            interaction.channel, interaction.guild, commit_msg,
+        )
+        await interaction.edit_original_response(
+            content=f"✅ **Saved `{self.rel_path}`** — committed and indexed.",
+            view=None,
+        )
+        self.stop()
+        logger.info(f"ARTIFACT: saved {self.rel_path}", interaction.guild)
+
+    @discord.ui.button(label="Discard", style=discord.ButtonStyle.red, emoji="🗑️")
+    async def discard(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer()
+        await interaction.edit_original_response(
+            content=f"🗑️ **Discarded** `{self.rel_path}` — not saved.",
+            attachments=[],
+            view=None,
+        )
+        self.stop()
+
+
 class ChallengeApprovalView(discord.ui.View):
     """User gate in front of the view-tree reconciliation sweep.
 

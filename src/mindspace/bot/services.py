@@ -1,3 +1,4 @@
+import io
 import os
 import re
 import datetime
@@ -6,6 +7,7 @@ import discord
 from mindspace.core import config
 from mindspace.core.logger import logger
 from mindspace.agent import prompts
+from mindspace.bot.views import ArtifactProposalView
 
 
 def _view_rel_path(rel_folder: str) -> str:
@@ -309,29 +311,35 @@ async def handle_research(bot, channel, guild, topic, interaction: discord.Inter
     filename = f"RESEARCH-{datetime.date.today()}-{subject}.md"
     file_path = os.path.join(channel_path, filename)
     lineage = f"\n\n---\n**Lineage:**\n- Path: {file_path}\n- URI: viking://{guild.name}/{channel_name}/{filename}"
-    bot.kb.write_file(file_path, report + lineage)
+    full_content = report + lineage
 
-    # Deliver the artifact before the challenger gate. save_and_challenge now
-    # blocks on an approval prompt (30s timeout) — running it before the final
-    # edit would hide the .md file behind that prompt, forcing the user to
-    # click through the gate just to receive their output.
+    # Stage the artifact behind a Save/Discard gate — the file is held in
+    # memory and surfaces as a Discord attachment for preview. Nothing
+    # lands on disk (and no commit / challenger runs) until the user
+    # presses Save; 24h timeout auto-discards.
+    view = ArtifactProposalView(
+        bot, channel_name=channel_name, rel_path=filename,
+        content=full_content,
+        commit_action_desc=f"Research synthesis on {topic}",
+    )
+    prompt_msg = f"📄 **Research complete: {topic}** — review the attached draft and Save to commit, or Discard."
+
+    def _attachment():
+        return discord.File(io.BytesIO(full_content.encode("utf-8")), filename=filename)
+
+    delivered = None
     if interaction is not None:
         try:
-            await interaction.edit_original_response(
-                content=f"✅ Research complete: **{topic}**",
-                attachments=[discord.File(file_path)],
+            delivered = await interaction.edit_original_response(
+                content=prompt_msg, attachments=[_attachment()], view=view,
             )
         except discord.HTTPException as e:
-            logger.warning(f"RESEARCH: failed to attach file to interaction: {e}")
-            await channel.send(f"✅ Research complete.", file=discord.File(file_path))
+            logger.warning(f"RESEARCH: failed to attach artifact to interaction: {e}")
+            delivered = await channel.send(prompt_msg, file=_attachment(), view=view)
     else:
-        await channel.send(f"✅ Research complete.", file=discord.File(file_path))
-
-    commit_msg = await bot.agent.generate_commit_message(
-        f"Research synthesis on {topic}"
-    )
-    await bot.save_and_challenge(channel, guild, commit_msg)
-    logger.info(f"RESEARCH: completed — topic={topic!r} channel=#{channel_name}", guild)
+        delivered = await channel.send(prompt_msg, file=_attachment(), view=view)
+    view.message = delivered
+    logger.info(f"RESEARCH: artifact staged for approval — topic={topic!r} channel=#{channel_name}", guild)
 
 async def handle_omni(bot, channel, guild, query, interaction: discord.Interaction = None):
     await bot.send_message_safe(channel, f"🌐 Gathering global KB context for: {query}...", interaction=interaction)
@@ -364,27 +372,32 @@ async def handle_omni(bot, channel, guild, query, interaction: discord.Interacti
     filename = f"OMNI-{datetime.date.today()}-{subject}.md"
     file_path = os.path.join(channel_path, filename)
     lineage = f"\n\n---\n**Lineage:**\n- Path: {file_path}\n- URI: viking://{guild.name}/omni/{filename}"
-    bot.kb.write_file(file_path, report + lineage)
+    full_content = report + lineage
 
-    # Deliver the artifact before the challenger gate so the .md file isn't
-    # hidden behind the approval prompt.
+    # Stage the artifact behind a Save/Discard gate — see handle_research.
+    view = ArtifactProposalView(
+        bot, channel_name=channel_name, rel_path=filename,
+        content=full_content,
+        commit_action_desc=f"Omni query synthesis: {query}",
+    )
+    prompt_msg = f"📄 **Omni search complete: {query}** — review the attached draft and Save to commit, or Discard."
+
+    def _attachment():
+        return discord.File(io.BytesIO(full_content.encode("utf-8")), filename=filename)
+
+    delivered = None
     if interaction is not None:
         try:
-            await interaction.edit_original_response(
-                content="✅ Omni search complete.",
-                attachments=[discord.File(file_path)],
+            delivered = await interaction.edit_original_response(
+                content=prompt_msg, attachments=[_attachment()], view=view,
             )
         except discord.HTTPException as e:
-            logger.warning(f"OMNI: failed to attach file to interaction: {e}")
-            await channel.send("✅ Omni search complete.", file=discord.File(file_path))
+            logger.warning(f"OMNI: failed to attach artifact to interaction: {e}")
+            delivered = await channel.send(prompt_msg, file=_attachment(), view=view)
     else:
-        await channel.send("✅ Omni search complete.", file=discord.File(file_path))
-
-    commit_msg = await bot.agent.generate_commit_message(
-        f"Omni query synthesis: {query}"
-    )
-    await bot.save_and_challenge(channel, guild, commit_msg)
-    logger.info(f"**OMNI**: {query}", guild)
+        delivered = await channel.send(prompt_msg, file=_attachment(), view=view)
+    view.message = delivered
+    logger.info(f"**OMNI**: artifact staged for approval — query={query!r}", guild)
 
 async def handle_change_my_view(bot, channel, guild, instruction, interaction=None):
     channel_name = channel.name
