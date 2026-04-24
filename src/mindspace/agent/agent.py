@@ -2,7 +2,6 @@ import re
 import json
 import asyncio
 import os
-from bs4 import BeautifulSoup
 
 from mindspace.core import config
 from mindspace.core.logger import logger

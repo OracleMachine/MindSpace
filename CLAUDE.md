@@ -53,7 +53,7 @@ Thought/
 - **`bot.py`** — `MindSpaceBot(discord.Client)`: The entry point. Handles `on_message` and routes to commands (delegated to `services.py`), file ingestion, or passive dialogue. Wraps tools with async progress decorators for Discord status updates.
 - **`services.py`** — Core business logic for active commands (`!organize`, `!consolidate`, `!research`, `!omni`, `!change_my_view`) and the view-tree challenger (`challenge_local_view`, `check_upward_consistency`, `check_downward_consistency`, `handle_view_down_check`).
 - **`prompts.py`** — Centralized repository for all LLM prompt templates used by the agent and services.
-- **`agent.py`** — `MindSpaceAgent`: Dual-brain LLM abstraction. `GoogleGenAIBrain` for dialogue (async chat via `achat`, URL/file analysis, commit messages). `GeminiCLIBrain` for commands — owns the `gemini -y` subprocess, env (`GEMINI_CLI_HOME`) and args injection, and exposes `stream(prompt, cwd)` -> `CliStream` async-iterable handle.
+- **`agent.py`** — `MindSpaceAgent`: Dual-brain LLM abstraction. `GoogleGenAIBrain` for dialogue (async chat via `achat`, file analysis, commit messages). `GeminiCLIBrain` for commands — owns the `gemini -y` subprocess, env (`GEMINI_CLI_HOME`) and args injection, and exposes `stream(prompt, cwd)` -> `CliStream` async-iterable handle. URLs in user messages are not scraped — the ingestion handler replies with a paste-content-manually hint.
 - **`tools.py`** — `MindSpaceTools`: closure-bound tool functions exposed to the LLM during passive dialogue (`list_channel_files`, `search_channel_knowledge_base`, `search_global_knowledge_base`, `list_global_files`, `get_view_chain`, `record_thought`, `propose_update`). `propose_update` refuses any path whose basename is `view.md` at any depth — view edits only flow through the challenger / `/change_my_view`.
 - **`manager.py`** — `KnowledgeBaseManager`: All filesystem and Git operations. Creates per-server repos, manages channel folders, appends thoughts, and performs `git commit` after every active command. `save_state` returns `{touched, sha}` so the bot can drive the view-tree challenger. Hierarchical view helpers: `read_view`, `write_view`, `get_view_chain`, `list_subfolders_with_content`, `read_folder_context`.
 - **`mcp_bridge.py`** — MCP integration. `sync_cli_settings()` renders MCP servers into Gemini CLI's settings.json. `MCPSessionPool` manages live `ClientSession`s for the dialogue brain via AFC.
@@ -71,7 +71,7 @@ Thought/
 
 Two brains run in parallel, each specialized for its role:
 
-- **Dialogue brain** — `GoogleGenAIBrain` (Google GenAI SDK). Passive chat, URL/file analysis, commit messages. Uses AFC (Automatic Function Calling) for tool dispatch including MCP sessions.
+- **Dialogue brain** — `GoogleGenAIBrain` (Google GenAI SDK). Passive chat, file analysis, commit messages. Uses AFC (Automatic Function Calling) for tool dispatch including MCP sessions.
 - **Command brain** — `GeminiCLIBrain` (Gemini CLI `gemini -y`). `!organize`, `!research`, `!omni`. Web search, file I/O, multi-step agentic loops. Config isolated via `GEMINI_CLI_HOME=Thought/bot-home`; workspace sandboxed via `cwd`.
 
 ### OpenViking & PDF deep-reasoning

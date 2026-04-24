@@ -8,7 +8,7 @@ Ensure you have the following installed and configured on your machine:
 - **Python 3.12+**
 - **Dependencies:**
   ```bash
-  pip install discord.py google-genai openviking GitPython httpx beautifulsoup4 pyyaml python-dotenv
+  pip install discord.py google-genai openviking GitPython pyyaml python-dotenv
   ```
 - **Gemini CLI:** Installed and authenticated (`gemini login`).
 - **Google AI Studio:** Obtain a Gemini API Key from [aistudio.google.com](https://aistudio.google.com/).

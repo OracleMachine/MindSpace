@@ -9,8 +9,6 @@ dependencies = [
     "google-genai",
     "GitPython",
     "pyyaml",
-    "beautifulsoup4",
-    "httpx",
     "openviking"
 ]
 
